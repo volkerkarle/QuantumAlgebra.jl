@@ -27,7 +27,7 @@ Base.literal_pow(::typeof(^),A::Union{QuTerm,QuExpr},::Val{n}) where n = A^n
 noaliascopy(A::Param) = Param(A.name,A.state,indcopy(A.inds))
 # δ is isbitstype
 noaliascopy(A::δ) = A
-noaliascopy(A::BaseOperator) = BaseOperator(A.t,A.name,indcopy(A.inds))
+noaliascopy(A::BaseOperator) = BaseOperator(A.t, A.name, indcopy(A.inds), A.algebra_id, A.gen_idx)
 noaliascopy(A::T) where T<:Union{ExpVal,Corr} = T(noaliascopy(A.ops))
 noaliascopy(A::BaseOpProduct) = BaseOpProduct(noaliascopy(A.v))
 noaliascopy(v::Vector{T}) where T<:Union{δ,Param,BaseOperator,ExpVal,Corr} = noaliascopy.(v)
@@ -36,7 +36,7 @@ noaliascopy(A::QuTerm) = QuTerm(A.nsuminds, noaliascopy(A.δs), noaliascopy(A.pa
 # IMPT: create a dictionary directly here, do not go through _add_sum_term
 noaliascopy(A::QuExpr) = QuExpr(Dict{QuTerm,Number}(noaliascopy(t) => s for (t,s) in A.terms))
 
-==(A::BaseOperator,B::BaseOperator) = A.t == B.t && A.name == B.name && A.inds == B.inds
+==(A::BaseOperator,B::BaseOperator) = A.t == B.t && A.name == B.name && A.inds == B.inds && A.algebra_id == B.algebra_id && A.gen_idx == B.gen_idx
 ==(A::BaseOpProduct,B::BaseOpProduct) = A.v == B.v
 ==(A::Param,B::Param) = A.name == B.name && A.state == B.state && A.inds == B.inds
 ==(A::T,B::T) where T<:Union{ExpVal,Corr} = A.ops == B.ops
@@ -77,6 +77,8 @@ function Base.hash(A::BaseOperator,h::UInt)
     h = hash(UInt(A.t),h)
     h = hash(A.name,h)
     h = hash(A.inds,h)
+    h = hash(A.algebra_id,h)
+    h = hash(A.gen_idx,h)
     h
 end
 function Base.hash(A::Param,h::UInt)
@@ -135,6 +137,8 @@ end
     @_cmpAB t false
     @_cmpAB name false
     @_cmpAB inds false
+    @_cmpAB algebra_id false
+    @_cmpAB gen_idx false
     # they are equal
     return 0
 end
@@ -179,7 +183,7 @@ end
 
 comm(A,B) = A*B - B*A
 
-Base.adjoint(A::BaseOperator) = BaseOperator(BaseOpType_adj[Int(A.t)],A.name,A.inds)
+Base.adjoint(A::BaseOperator) = BaseOperator(BaseOpType_adj[Int(A.t)], A.name, A.inds, A.algebra_id, A.gen_idx)
 Base.adjoint(A::BaseOpProduct) = BaseOpProduct(adjoint.(view(A.v, lastindex(A.v):-1:1)))
 Base.adjoint(A::T) where {T<:Union{ExpVal,Corr}} = T(adjoint(A.ops))
 Base.adjoint(A::Param) = A.state=='r' ? A : Param(A.name,A.state=='n' ? 'c' : 'n',A.inds)
@@ -196,15 +200,17 @@ function is_normal_form(v::Vector{BaseOperator})
     # now check that no contractions occur
     for k in 1:length(v)-1
         O = v[k]
-        dosimplify, fac, op = _contract(O,v[k+1])
+        contract_result = _contract(O,v[k+1])
+        dosimplify = contract_result[1]
         dosimplify && return false
         if O.t in (TLSx_,TLSy_,TLSz_)
             # lookahead while we can commute through
             for kp = k+2:length(v)
                 v[kp].t in (TLSx_,TLSy_,TLSz_) || break
                 _exchange(v[kp-1],v[kp]) == (1,nothing) || break
-                dosimplify, fac, op = _contract(O,v[kp])
-                dosimplify && return false
+                contract_result_inner = _contract(O,v[kp])
+                dosimplify_inner = contract_result_inner[1]
+                dosimplify_inner && return false
             end
         end
     end
@@ -339,11 +345,47 @@ function ϵ_ab(A::BaseOperator,B::BaseOperator)
     c, s
 end
 
+# ExchangeResult for commutation relations
+# For simple cases: one operator with a complex-rational prefactor
+# For SU(N) with N>2: multiple operators (ops is a Vector of (prefactor, operator) pairs)
 struct ExchangeResult
-    pref::Complex{Rational{Int}}
+    pref::Complex{Rational{Int}}  # prefactor for identity term
     δs::Vector{δ}
-    op::Union{Nothing,BaseOperator}
+    op::Union{Nothing,BaseOperator}  # single operator (legacy, for most cases)
+    # For SU(N) multi-term results: Vector of (coefficient, operator)
+    # If non-empty, this takes precedence over op
+    ops::Vector{Tuple{ComplexF64, BaseOperator}}
 end
+
+# Legacy constructor for single-operator results (accepts any Number for pref)
+ExchangeResult(pref::Number, δs::Vector{δ}, op::Union{Nothing,BaseOperator}) = 
+    ExchangeResult(Complex{Rational{Int}}(pref), δs, op, Tuple{ComplexF64, BaseOperator}[])
+
+# Constructor for multi-operator results (SU(N) with N > 2)
+ExchangeResult(pref::Number, δs::Vector{δ}, ops::Vector{Tuple{ComplexF64, BaseOperator}}) = 
+    ExchangeResult(Complex{Rational{Int}}(pref), δs, nothing, ops)
+
+# Check if this result has multiple operators
+has_multi_ops(r::ExchangeResult) = !isempty(r.ops)
+
+# ContractionResult for operator products (simplification)
+# Supports the SU(N) product rule: T^a T^b = (1/2N)δ_{ab}I + (1/2)(d^{abc} + if^{abc})T^c
+# This can produce an identity term plus multiple generator terms
+struct ContractionResult
+    id_coeff::ComplexF64  # coefficient of identity term
+    ops::Vector{Tuple{ComplexF64, BaseOperator}}  # generator terms: (coefficient, operator)
+end
+
+# Constructor for simple contractions (single operator or none)
+ContractionResult(id_coeff::Number, op::Union{Nothing,BaseOperator}) = 
+    op === nothing ? ContractionResult(ComplexF64(id_coeff), Tuple{ComplexF64, BaseOperator}[]) :
+                     ContractionResult(ComplexF64(0), [(ComplexF64(id_coeff), op)])
+
+# Check if contraction produces only identity (no operators)
+is_identity_only(r::ContractionResult) = isempty(r.ops)
+
+# Check if contraction produces a single operator
+is_single_op(r::ContractionResult) = length(r.ops) == 1
 
 # rewrite B A as x A B + y, with A < B in our ordering
 # returns (x::Int,y::Union{ExchangeResult,Nothing})
@@ -421,12 +463,141 @@ function _exchange(A::BaseOperator,B::BaseOperator)::Tuple{Int,Union{ExchangeRes
         throw(ArgumentError("QuantumAlgebra currently does not support mixing 'normal' (x,y,z) Pauli matrices with jump operators (+,-)."))
     end
 
+    # Lie algebra generators commute with all other operator types
+    if A.t == LieAlgebraGen_ && B.t != LieAlgebraGen_
+        return (1, nothing)
+    elseif A.t != LieAlgebraGen_ && B.t == LieAlgebraGen_
+        return (1, nothing)
+    end
+
+    # Lie algebra generator commutation: [T^a, T^b] = i f^{abc} T^c
+    if A.t == LieAlgebraGen_ && B.t == LieAlgebraGen_
+        return _exchange_lie_algebra_generators(A, B)
+    end
+
     error("_exchange should never reach this! A=$A, B=$B.")
+end
+
+"""
+    _exchange_lie_algebra_generators(A, B)
+
+Handle exchange of two Lie algebra generators.
+B A = A B + [B, A] = A B - [A, B] = A B - i f^{abc} T^c
+
+For generators from the same algebra with the same indices:
+[T^a, T^b] = i f^{abc} T^c
+
+Returns (exchange_prefactor, ExchangeResult) following the convention:
+B A = exchange_prefactor * A B + terms_from_ExchangeResult
+"""
+function _exchange_lie_algebra_generators(A::BaseOperator, B::BaseOperator)
+    # Different algebras or different names commute
+    if A.algebra_id != B.algebra_id || A.name != B.name
+        return (1, nothing)
+    end
+    
+    # Check if indices match
+    dd = δ(A.inds, B.inds)
+    if dd === nothing
+        return (1, nothing)
+    end
+    
+    # Same generator commutes with itself
+    if A.gen_idx == B.gen_idx
+        return (1, nothing)
+    end
+    
+    # Get the algebra and compute commutator [B, A] = -[A, B]
+    # We want B A = A B + [B, A] = A B - i f^{AB,c} T^c
+    # where f^{AB,c} are structure constants for [A, B]
+    alg = get_algebra(A.algebra_id)
+    
+    # Get structure constants for [T^a, T^b] where a = A.gen_idx, b = B.gen_idx
+    # [T^a, T^b] = i f^{abc} T^c
+    # So [T^b, T^a] = -i f^{abc} T^c = i f^{bac} T^c
+    # We want B A = A B + [B, A], and [B, A] = i f^{ba,c} T^c = -i f^{ab,c} T^c
+    
+    f_ab = structure_constants(alg, Int(A.gen_idx), Int(B.gen_idx))
+    
+    if isempty(f_ab)
+        # Commutator is zero
+        return (1, nothing)
+    end
+    
+    if isempty(dd)
+        # Indices are all the same: T^b T^a = T^a T^b + [T^b, T^a]
+        # Actually for normal ordering we need: B A = ? A B + extra
+        # If A < B in ordering, and we're computing B A:
+        # B A = A B + [B, A] = A B - [A, B] = A B - i f^{abc} T^c
+        
+        if length(f_ab) == 1
+            # Single term result (e.g., SU(2))
+            c, f_abc = first(f_ab)
+            # [B, A] = -i f^{abc} T^c
+            coeff = -im * f_abc
+            new_op = LieAlgebraGenerator(A.name, A.algebra_id, c, A.inds)
+            # Convert to Complex{Rational{Int}} if possible
+            r_coeff = _try_rationalize_complex(coeff)
+            if r_coeff !== nothing
+                return (1, ExchangeResult(r_coeff, dd, new_op))
+            else
+                return (1, ExchangeResult(0//1, dd, [(coeff, new_op)]))
+            end
+        else
+            # Multi-term result (e.g., SU(3))
+            ops = Tuple{ComplexF64, BaseOperator}[]
+            for (c, f_abc) in f_ab
+                coeff = -im * f_abc
+                new_op = LieAlgebraGenerator(A.name, A.algebra_id, c, A.inds)
+                push!(ops, (coeff, new_op))
+            end
+            return (1, ExchangeResult(0//1, dd, ops))
+        end
+    else
+        # Different indices: [T^b_j, T^a_i] = δ_{ij} * (commutator at same site)
+        # T^b_j T^a_i = T^a_i T^b_j + δ_{ij} [T^b, T^a]
+        
+        if length(f_ab) == 1
+            c, f_abc = first(f_ab)
+            coeff = -im * f_abc
+            new_op = LieAlgebraGenerator(A.name, A.algebra_id, c, A.inds)
+            r_coeff = _try_rationalize_complex(coeff)
+            if r_coeff !== nothing
+                return (1, ExchangeResult(r_coeff, dd, new_op))
+            else
+                return (1, ExchangeResult(0//1, dd, [(coeff, new_op)]))
+            end
+        else
+            ops = Tuple{ComplexF64, BaseOperator}[]
+            for (c, f_abc) in f_ab
+                coeff = -im * f_abc
+                new_op = LieAlgebraGenerator(A.name, A.algebra_id, c, A.inds)
+                push!(ops, (coeff, new_op))
+            end
+            return (1, ExchangeResult(0//1, dd, ops))
+        end
+    end
+end
+
+"""
+Try to convert a ComplexF64 to Complex{Rational{Int}}.
+Returns nothing if not representable as a simple rational.
+"""
+function _try_rationalize_complex(z::ComplexF64, tol::Float64=1e-10)
+    re_r = _to_rational(real(z), tol)
+    im_r = _to_rational(imag(z), tol)
+    if re_r !== nothing && im_r !== nothing
+        return Complex{Rational{Int}}(re_r, im_r)
+    end
+    return nothing
 end
 
 const ComplexInt = Complex{Int}
 
-function _contract(A::BaseOperator,B::BaseOperator)::Tuple{Bool,ComplexInt,Union{BaseOperator,Nothing}}
+# Legacy contraction result type for backwards compatibility
+const LegacyContractionResult = Tuple{Bool,ComplexInt,Union{BaseOperator,Nothing}}
+
+function _contract(A::BaseOperator,B::BaseOperator)::Union{LegacyContractionResult, Tuple{Bool, ContractionResult}}
     if A.t in (TLSCreate_,TLSDestroy_,FermionDestroy_,FermionCreate_) && A == B
         return (true,zero(ComplexInt),nothing)
     elseif A.t in (TLSx_,TLSy_,TLSz_) && B.t in (TLSx_,TLSy_,TLSz_) && A.name == B.name && A.inds == B.inds
@@ -437,9 +608,73 @@ function _contract(A::BaseOperator,B::BaseOperator)::Tuple{Bool,ComplexInt,Union
             c, s = ϵ_ab(A,B)
             return (true, ComplexInt(0,s), BaseOperator(c,A.name,A.inds))
         end
+    elseif A.t == LieAlgebraGen_ && B.t == LieAlgebraGen_
+        return _contract_lie_algebra_generators(A, B)
     else
         return (false,zero(ComplexInt),nothing)
     end
+end
+
+"""
+    _contract_lie_algebra_generators(A, B)
+
+Implement the full SU(N) product rule for Lie algebra generators:
+T^a T^b = (1/2N) δ_{ab} I + (1/2)(d^{abc} + i f^{abc}) T^c
+
+where:
+- d^{abc} are the symmetric structure constants
+- f^{abc} are the antisymmetric structure constants
+
+Returns (do_contract::Bool, ContractionResult) or legacy tuple.
+"""
+function _contract_lie_algebra_generators(A::BaseOperator, B::BaseOperator)
+    # Different algebras or different names don't contract
+    if A.algebra_id != B.algebra_id || A.name != B.name
+        return (false, zero(ComplexInt), nothing)
+    end
+    
+    # Different indices don't contract (would need δ function)
+    if A.inds != B.inds
+        return (false, zero(ComplexInt), nothing)
+    end
+    
+    # Get the algebra
+    alg = get_algebra(A.algebra_id)
+    N = algebra_dim(alg)
+    a, b = Int(A.gen_idx), Int(B.gen_idx)
+    
+    # Identity coefficient: (1/2N) δ_{ab}
+    id_coeff = a == b ? 1.0 / (2N) : 0.0
+    
+    # Generator terms: (1/2)(d^{abc} + i f^{abc}) T^c
+    d_ab = symmetric_structure_constants(alg, a, b)
+    f_ab = structure_constants(alg, a, b)
+    
+    # Combine d and f structure constants
+    gen_coeffs = Dict{Int, ComplexF64}()
+    
+    for (c, d_abc) in d_ab
+        gen_coeffs[c] = get(gen_coeffs, c, 0.0im) + d_abc / 2
+    end
+    
+    for (c, f_abc) in f_ab
+        gen_coeffs[c] = get(gen_coeffs, c, 0.0im) + im * f_abc / 2
+    end
+    
+    # Build the operator list
+    ops = Tuple{ComplexF64, BaseOperator}[]
+    for (c, coeff) in gen_coeffs
+        if abs(coeff) > 1e-12
+            new_op = LieAlgebraGenerator(A.name, A.algebra_id, c, A.inds)
+            push!(ops, (coeff, new_op))
+        end
+    end
+    
+    # Sort operators by generator index for deterministic ordering
+    sort!(ops, by = x -> x[2].gen_idx)
+    
+    result = ContractionResult(id_coeff, ops)
+    return (true, result)
 end
 
 function normal_order!(ops::BaseOpProduct,term_collector,shortcut_vacA_zero=false)
@@ -454,8 +689,24 @@ function normal_order!(ops::BaseOpProduct,term_collector,shortcut_vacA_zero=fals
             pp, exc_res = _exchange(A[j],A[j-1])
             #println("exchanging A[$j] = $(A[j]) and A[$kk] = $(A[kk]) gave result: $pp, $exc_res.")
             if exc_res !== nothing
-                if exc_res.op === nothing
+                if has_multi_ops(exc_res)
+                    # Multi-operator result from SU(N) with N > 2
+                    # Add identity term if present
+                    if !iszero(exc_res.pref)
+                        onew = BaseOpProduct([A[1:j-2]; A[j+1:end]])
+                        t = QuTerm(exc_res.δs, onew)
+                        _add_sum_term!(term_collector, t, exc_res.pref * prefactor)
+                    end
+                    # Add each operator term
+                    for (coeff, op) in exc_res.ops
+                        onew = BaseOpProduct([A[1:j-2]; op; A[j+1:end]])
+                        t = QuTerm(exc_res.δs, onew)
+                        _add_sum_term!(term_collector, t, coeff * prefactor)
+                    end
+                elseif exc_res.op === nothing
                     onew = BaseOpProduct([A[1:j-2]; A[j+1:end]])
+                    t = QuTerm(exc_res.δs, onew)
+                    _add_sum_term!(term_collector,t,exc_res.pref*prefactor)
                 elseif A[j].t == TLSCreate_
                     @assert exc_res.op.t == TLSz_
                     # we got σz_i, have to replace it by (1 - 2 σ+_i σ-_i) (which is really -σz, see explanation in _exchange)
@@ -464,11 +715,13 @@ function normal_order!(ops::BaseOpProduct,term_collector,shortcut_vacA_zero=fals
                     _add_sum_term!(term_collector,t,-2exc_res.pref*prefactor)
                     # this one gives the "1" term that is used below
                     onew = BaseOpProduct([A[1:j-2]; A[j+1:end]])
+                    t = QuTerm(exc_res.δs, onew)
+                    _add_sum_term!(term_collector,t,exc_res.pref*prefactor)
                 else
                     onew = BaseOpProduct([A[1:j-2]; exc_res.op; A[j+1:end]])
+                    t = QuTerm(exc_res.δs, onew)
+                    _add_sum_term!(term_collector,t,exc_res.pref*prefactor)
                 end
-                t = QuTerm(exc_res.δs, onew)
-                _add_sum_term!(term_collector,t,exc_res.pref*prefactor)
                 #println("adding term = $(exc_res.pref*prefactor) * $t, term_collector = $(term_collector)")
             end
             # only modify prefactor after the exchange
@@ -487,47 +740,76 @@ function normal_order!(ops::BaseOpProduct,term_collector,shortcut_vacA_zero=fals
     did_contractions = false
     k = 1
     while k < length(A)
-        dosimplify, fac, op = _contract(A[k],A[k+1])
+        contract_result = _contract(A[k],A[k+1])
+        dosimplify = contract_result[1]
         if dosimplify
             did_contractions = true
-            prefactor *= fac
-            iszero(prefactor) && return prefactor
-            if op === nothing
-                deleteat!(A,(k,k+1))
-                #println("deleted indices $(k-1) and $k, A is now: $A, prefactor is now: $prefactor")
+            if contract_result isa Tuple{Bool, ContractionResult}
+                # Lie algebra generator contraction (multi-term result)
+                result = contract_result[2]
+                
+                # For Lie algebra contractions, we add all terms to term_collector
+                # and then signal that this product should be zeroed out
+                
+                # Add identity term if present: id_coeff * (remaining operators)
+                if abs(result.id_coeff) > 1e-12
+                    remaining_ops = [A[1:k-1]; A[k+2:end]]
+                    onew = BaseOpProduct(remaining_ops)
+                    t = QuTerm(onew)
+                    _add_sum_term!(term_collector, t, result.id_coeff * prefactor)
+                end
+                
+                # Add generator terms: coeff * (A[1:k-1] op A[k+2:end])
+                for (coeff, op) in result.ops
+                    remaining_ops = [A[1:k-1]; op; A[k+2:end]]
+                    onew = BaseOpProduct(remaining_ops)
+                    t = QuTerm(onew)
+                    _add_sum_term!(term_collector, t, coeff * prefactor)
+                end
+                
+                # Remove the contracted pair from A
+                deleteat!(A, (k, k+1))
+                
+                # Since we've added all contributions to term_collector,
+                # the "main" term (A with prefactor) should contribute nothing more
+                # We set prefactor to 0 and return - further processing of A is meaningless
+                return zero(prefactor)
             else
-                A[k] = op
-                deleteat!(A,k+1)
-                #println("deleted index $k and replaced $(k-1) by $op. A is now: $A, prefactor is now: $prefactor")
+                # Legacy contraction (TLS, fermions, etc.)
+                fac = contract_result[2]
+                op = contract_result[3]
+                prefactor *= fac
+                iszero(prefactor) && return prefactor
+                if op === nothing
+                    deleteat!(A,(k,k+1))
+                else
+                    A[k] = op
+                    deleteat!(A,k+1)
+                end
+                k > 1 && (k -= 1)
             end
-            # we replaced [...,A[k-1],A[k],A[k+1],A[k+2],...]
-            # with        [...,A[k-1],A[k+2],...]
-            # or with     [...,A[k-1],Anew,A[k+2]...]
-            # so reduce k by one to compare the new operator at k with A[k-1] as well
-            # (with the ordering we have, it's probably impossible for A[k-1] to contract
-            # with Anew if it didn't contract with A[k], but let's be safe)
-            k > 1 && (k -= 1)
         else
-            if A[k].t in (TLSx_,TLSy_,TLSz_)
+            if !isempty(A) && k <= length(A) && A[k].t in (TLSx_,TLSy_,TLSz_)
                 # lookahead while we can commute through
                 # we already checked with k+1, so start at k+2
                 for kp = k+2:length(A)
                     A[kp].t in (TLSx_,TLSy_,TLSz_) || break
                     _exchange(A[kp-1],A[kp]) == (1,nothing) || break
-                    dosimplify, fac, op = _contract(A[k],A[kp])
-                    if dosimplify
+                    contract_result_inner = _contract(A[k],A[kp])
+                    dosimplify_inner = contract_result_inner[1]
+                    if dosimplify_inner
                         did_contractions = true
+                        # Legacy contraction only for TLS lookahead
+                        fac = contract_result_inner[2]
+                        op = contract_result_inner[3]
                         prefactor *= fac
                         iszero(prefactor) && return prefactor
                         if op === nothing
                             deleteat!(A,(k,kp))
-                            #println("deleted indices $(k-1) and $k, A is now: $A, prefactor is now: $prefactor")
                         else
                             A[k] = op
                             deleteat!(A,kp)
-                            #println("deleted index $k and replaced $(k-1) by $op. A is now: $A, prefactor is now: $prefactor")
                         end
-                        # k -= 2 here because we have k += 1 just below
                         k > 1 && (k -= 2)
                         break
                     end

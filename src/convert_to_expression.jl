@@ -1,7 +1,14 @@
 export julia_expression
 
 # to make a variable name from operators
-varname(A::BaseOperator) = string(A.name,BaseOpType_expr[Int(A.t)])
+function varname(A::BaseOperator)
+    if A.t == LieAlgebraGen_
+        # For Lie algebra generators, include the generator index as superscript
+        return string(A.name, superscript(A.gen_idx))
+    else
+        return string(A.name, BaseOpType_expr[Int(A.t)])
+    end
+end
 varname(A::BaseOpProduct) = Symbol(varname.(A.v)...)
 varname(A::Union{ExpVal,Corr}) = varname(A.ops)
 

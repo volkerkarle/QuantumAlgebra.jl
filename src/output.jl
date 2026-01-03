@@ -43,7 +43,18 @@ function Base.print(io::IO,ii::QuIndex)
     end
 end
 
-Base.print(io::IO,A::BaseOperator) = (B = unalias(A); print(io,B.name,BaseOpType_sym[Int(B.t)],"(",B.inds...,")"))
+function Base.print(io::IO, A::BaseOperator)
+    B = unalias(A)
+    if B.t == LieAlgebraGen_
+        # For Lie algebra generators, show the generator index as superscript
+        print(io, B.name, superscript(Int(B.gen_idx)))
+        if !isempty(assignedinds(B.inds))
+            print(io, "(", B.inds..., ")")
+        end
+    else
+        print(io, B.name, BaseOpType_sym[Int(B.t)], "(", B.inds..., ")")
+    end
+end
 Base.print(io::IO,A::δ) = print(io,"δ(",A.iA,A.iB,")")
 Base.print(io::IO,A::Param) = print(io, A.name, A.state=='c' ? "*" : "", isempty(assignedinds(A.inds)) ? "" : "($(A.inds...))")
 Base.print(io::IO,A::ExpVal) = print(io,"⟨", A.ops, "⟩")
@@ -151,7 +162,15 @@ end
 latexindstr(inds) = isempty(assignedinds(inds)) ? "" : "_{$(latexify.(inds)...)}"
 @latexrecipe function f(A::BaseOperator)
     B = unalias(A)
-    return LaTeXString("{$(unicode_to_latex(B.name))}$(latexindstr(B.inds))$(BaseOpType_latex[Int(B.t)])")
+    if B.t == LieAlgebraGen_
+        # For Lie algebra generators: name^{gen_idx}_{site_indices}
+        name_latex = unicode_to_latex(B.name)
+        gen_idx_str = "^{$(Int(B.gen_idx))}"
+        inds_str = latexindstr(B.inds)
+        return LaTeXString("{$name_latex}$gen_idx_str$inds_str")
+    else
+        return LaTeXString("{$(unicode_to_latex(B.name))}$(latexindstr(B.inds))$(BaseOpType_latex[Int(B.t)])")
+    end
 end
 @latexrecipe function f(A::Param)
     return LaTeXString(string("$(unicode_to_latex(A.name))$(latexindstr(A.inds))", A.state=='c' ? "^{*}" : ""))

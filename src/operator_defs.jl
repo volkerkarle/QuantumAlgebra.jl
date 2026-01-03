@@ -9,6 +9,7 @@ export @tlspm_ops, @tlsxyz_ops
 export @Pr_str, @Pc_str, ∑
 export param, expval, corr
 export map_scalar_function
+export LieAlgebraGenerator, is_lie_algebra_gen, su_generator, su_generators
 
 # compile-time options
 const _DEFINE_DEFAULT_OPS = @load_preference("define_default_ops", true)
@@ -171,18 +172,60 @@ const NoName = QuOpName(Symbol())
 
 # the enum also directly defines a natural ordering,so choose this directly how we later want it
 # start the counting at 1 so we can index into the tuples defined below with Int(BaseOpType)
-@enum BaseOpType        BosonCreate_=1 FermionCreate_   TLSCreate_   TLSx_  TLSy_  TLSz_  TLSDestroy_ FermionDestroy_ BosonDestroy_
-const BaseOpType_adj = (BosonDestroy_, FermionDestroy_, TLSDestroy_, TLSx_, TLSy_, TLSz_, TLSCreate_, FermionCreate_, BosonCreate_)
-const BaseOpType_sym  = ("†", "†", "⁺", "ˣ", "ʸ", "ᶻ", "⁻", "", "")
-const BaseOpType_expr = ("ᴴ", "ᴴ", "⁺", "ˣ", "ʸ", "ᶻ", "⁻", "", "")
-const BaseOpType_latex = ("^{\\dagger}", "^{\\dagger}", "^{+}", "^{x}", "^{y}", "^{z}", "^{-}", "", "")
+@enum BaseOpType        BosonCreate_=1 FermionCreate_   TLSCreate_   TLSx_  TLSy_  TLSz_  TLSDestroy_ FermionDestroy_ BosonDestroy_ LieAlgebraGen_
+const BaseOpType_adj = (BosonDestroy_, FermionDestroy_, TLSDestroy_, TLSx_, TLSy_, TLSz_, TLSCreate_, FermionCreate_, BosonCreate_, LieAlgebraGen_)
+const BaseOpType_sym  = ("†", "†", "⁺", "ˣ", "ʸ", "ᶻ", "⁻", "", "", "")
+const BaseOpType_expr = ("ᴴ", "ᴴ", "⁺", "ˣ", "ʸ", "ᶻ", "⁻", "", "", "")
+const BaseOpType_latex = ("^{\\dagger}", "^{\\dagger}", "^{+}", "^{x}", "^{y}", "^{z}", "^{-}", "", "", "")
 
+# BaseOperator struct with optional Lie algebra fields
+# For non-Lie-algebra operators (bosons, fermions, TLS), algebra_id = 0 and gen_idx = 0
+# For Lie algebra generators, algebra_id is the registry ID and gen_idx is the generator index
 @concrete struct BaseOperator
     t::BaseOpType
     name::QuOpName
     inds::QuIndices
-    BaseOperator(t,name,inds...) = new(t,QuOpName(name),make_indices(inds...))
+    algebra_id::UInt16
+    gen_idx::UInt16
+    # Constructor for non-Lie-algebra operators (backwards compatible)
+    function BaseOperator(t::BaseOpType, name, inds...)
+        t != LieAlgebraGen_ || throw(ArgumentError("Use LieAlgebraGenerator() for Lie algebra generators"))
+        new(t, QuOpName(name), make_indices(inds...), UInt16(0), UInt16(0))
+    end
+    # Full constructor for Lie algebra generators
+    function BaseOperator(t::BaseOpType, name, inds::QuIndices, algebra_id::UInt16, gen_idx::UInt16)
+        if t == LieAlgebraGen_
+            algebra_id != 0 || throw(ArgumentError("Lie algebra generator requires non-zero algebra_id"))
+            gen_idx != 0 || throw(ArgumentError("Lie algebra generator requires non-zero gen_idx"))
+        else
+            algebra_id == 0 || throw(ArgumentError("Non-Lie-algebra operators must have algebra_id = 0"))
+            gen_idx == 0 || throw(ArgumentError("Non-Lie-algebra operators must have gen_idx = 0"))
+        end
+        new(t, QuOpName(name), inds, algebra_id, gen_idx)
+    end
 end
+
+# Check if operator is a Lie algebra generator
+is_lie_algebra_gen(op::BaseOperator) = op.t == LieAlgebraGen_
+
+"""
+    LieAlgebraGenerator(name, algebra_id, gen_idx, inds...)
+
+Create a Lie algebra generator operator.
+- `name`: operator name (symbol)
+- `algebra_id`: ID of the registered algebra (from get_or_create_su, etc.)
+- `gen_idx`: index of the generator (1 to num_generators)
+- `inds...`: optional indices
+"""
+function LieAlgebraGenerator(name, algebra_id::UInt16, gen_idx::Integer, inds...)
+    BaseOperator(LieAlgebraGen_, QuOpName(name), make_indices(inds...), algebra_id, UInt16(gen_idx))
+end
+
+# Convenience constructor with integer algebra_id
+LieAlgebraGenerator(name, algebra_id::Integer, gen_idx::Integer, inds...) = 
+    LieAlgebraGenerator(name, UInt16(algebra_id), gen_idx, inds...)
+
+# Note: su_generator and su_generators are defined in lie_algebra.jl after the algebra registry is available
 
 for (op,desc) in (
     (:BosonDestroy,"bosonic annihilation"),
@@ -496,3 +539,361 @@ const QuantumObject = Union{QuIndex,QuOpName,BaseOperator,Param,BaseOpProduct,Ex
     export σx, σy, σz, σp, σm
     export a, adag, f, fdag
 end
+
+# ============================================================================
+# SU(N) generator convenience functions
+# ============================================================================
+
+"""
+    su_generator(N::Int, name::Symbol, gen_idx::Int, inds...)
+
+Create a single SU(N) generator operator as a QuExpr.
+
+# Arguments
+- `N`: dimension of SU(N) (e.g., 2 for SU(2), 3 for SU(3))
+- `name`: operator name (symbol)
+- `gen_idx`: generator index (1 to N²-1)
+- `inds...`: optional indices
+
+# Example
+```julia
+# Create the first SU(3) generator named λ
+T1 = su_generator(3, :λ, 1)
+
+# Create with an index
+T1_i = su_generator(3, :λ, 1, :i)
+```
+"""
+function su_generator(N::Int, name::Symbol, gen_idx::Int, inds...)
+    ngen = N^2 - 1
+    1 <= gen_idx <= ngen || throw(ArgumentError("Generator index must be 1 to $ngen for SU($N), got $gen_idx"))
+    algebra_id = get_or_create_su(N)
+    QuExpr(LieAlgebraGenerator(name, algebra_id, gen_idx, inds...))
+end
+
+"""
+    su_generators(N::Int, name::Symbol, inds...)
+
+Create all SU(N) generators as a tuple of QuExpr.
+
+# Arguments
+- `N`: dimension of SU(N)
+- `name`: base name for operators
+- `inds...`: optional indices (applied to all generators)
+
+# Returns
+A tuple of N²-1 QuExpr, one for each generator.
+
+# Example
+```julia
+# Create all 8 SU(3) generators
+λ = su_generators(3, :λ)
+λ[1] * λ[2]  # Product of first two generators
+
+# With indices
+λ_i = su_generators(3, :λ, :i)
+```
+"""
+function su_generators(N::Int, name::Symbol, inds...)
+    ngen = N^2 - 1
+    algebra_id = get_or_create_su(N)
+    ntuple(k -> QuExpr(LieAlgebraGenerator(name, algebra_id, k, inds...)), ngen)
+end
+
+# ============================================================================
+# TLS ↔ SU(2) conversion functions
+# ============================================================================
+# 
+# Relationship: σ^a = 2 T^a (Pauli matrices = 2 × SU(2) generators)
+# 
+# Generator ordering (consistent with gellmann_matrix):
+#   T¹ = σˣ/2,  T² = σʸ/2,  T³ = σᶻ/2
+
+export tls_to_su2, su2_to_tls
+
+"""
+    tls_to_su2(A::QuExpr)
+
+Convert TLS (Pauli) operators in expression A to SU(2) generators.
+
+The conversion uses: σ^a = 2 T^a, so:
+- σˣ → 2 T¹
+- σʸ → 2 T²
+- σᶻ → 2 T³
+
+Note: This only converts σˣ, σʸ, σᶻ operators. The σ⁺, σ⁻ operators are 
+not converted as they are not simple multiples of generators.
+
+# Example
+```julia
+tls_to_su2(σx())  # => 2 T¹
+tls_to_su2(σx() * σy())  # => 4 T¹ T²
+```
+"""
+function tls_to_su2(A::QuExpr)
+    result = QuExpr()
+    for (term, coeff) in A.terms
+        new_terms = _tls_to_su2_term(term, coeff)
+        for (t, s) in new_terms
+            _add_sum_term!(result, t, s)
+        end
+    end
+    result
+end
+
+function _tls_to_su2_term(term::QuTerm, coeff)
+    # Check if there are any TLS operators to convert
+    tls_ops = filter(op -> op.t in (TLSx_, TLSy_, TLSz_, TLSCreate_, TLSDestroy_), term.bares.v)
+    isempty(tls_ops) && return [(term, coeff)]
+    
+    # We need to handle ladder operators specially since they produce sums
+    # σ⁺ = (σˣ + iσʸ)/2 → T¹ + iT²
+    # σ⁻ = (σˣ - iσʸ)/2 → T¹ - iT²
+    
+    # First, find any ladder operators
+    has_ladder = any(op -> op.t in (TLSCreate_, TLSDestroy_), term.bares.v)
+    
+    if !has_ladder
+        # Simple case: only xyz operators, convert directly
+        new_bares = BaseOperator[]
+        factor = 1
+        for op in term.bares.v
+            if op.t == TLSx_
+                # σˣ → 2 T¹
+                factor *= 2
+                algebra_id = get_or_create_su(2)
+                push!(new_bares, LieAlgebraGenerator(op.name, algebra_id, SU2_SIGMA_X_INDEX, op.inds))
+            elseif op.t == TLSy_
+                # σʸ → 2 T²
+                factor *= 2
+                algebra_id = get_or_create_su(2)
+                push!(new_bares, LieAlgebraGenerator(op.name, algebra_id, SU2_SIGMA_Y_INDEX, op.inds))
+            elseif op.t == TLSz_
+                # σᶻ → 2 T³
+                factor *= 2
+                algebra_id = get_or_create_su(2)
+                push!(new_bares, LieAlgebraGenerator(op.name, algebra_id, SU2_SIGMA_Z_INDEX, op.inds))
+            else
+                push!(new_bares, op)
+            end
+        end
+        
+        new_term = QuTerm(term.nsuminds, term.δs, term.params, term.expvals, term.corrs, BaseOpProduct(new_bares))
+        return [(new_term, coeff * factor)]
+    else
+        # Complex case: ladder operators present, need to expand
+        # Build terms recursively
+        result_terms = [(Vector{BaseOperator}(), coeff)]
+        
+        for op in term.bares.v
+            algebra_id = get_or_create_su(2)
+            if op.t == TLSx_
+                # σˣ → 2 T¹
+                new_result = Tuple{Vector{BaseOperator}, Any}[]
+                for (bares, c) in result_terms
+                    new_op = LieAlgebraGenerator(op.name, algebra_id, SU2_SIGMA_X_INDEX, op.inds)
+                    push!(new_result, (vcat(bares, [new_op]), c * 2))
+                end
+                result_terms = new_result
+            elseif op.t == TLSy_
+                # σʸ → 2 T²
+                new_result = Tuple{Vector{BaseOperator}, Any}[]
+                for (bares, c) in result_terms
+                    new_op = LieAlgebraGenerator(op.name, algebra_id, SU2_SIGMA_Y_INDEX, op.inds)
+                    push!(new_result, (vcat(bares, [new_op]), c * 2))
+                end
+                result_terms = new_result
+            elseif op.t == TLSz_
+                # σᶻ → 2 T³
+                new_result = Tuple{Vector{BaseOperator}, Any}[]
+                for (bares, c) in result_terms
+                    new_op = LieAlgebraGenerator(op.name, algebra_id, SU2_SIGMA_Z_INDEX, op.inds)
+                    push!(new_result, (vcat(bares, [new_op]), c * 2))
+                end
+                result_terms = new_result
+            elseif op.t == TLSCreate_
+                # σ⁺ = (σˣ + iσʸ)/2 → T¹ + iT²
+                new_result = Tuple{Vector{BaseOperator}, Any}[]
+                for (bares, c) in result_terms
+                    T1 = LieAlgebraGenerator(op.name, algebra_id, SU2_SIGMA_X_INDEX, op.inds)
+                    T2 = LieAlgebraGenerator(op.name, algebra_id, SU2_SIGMA_Y_INDEX, op.inds)
+                    push!(new_result, (vcat(bares, [T1]), c))
+                    push!(new_result, (vcat(bares, [T2]), c * 1im))
+                end
+                result_terms = new_result
+            elseif op.t == TLSDestroy_
+                # σ⁻ = (σˣ - iσʸ)/2 → T¹ - iT²
+                new_result = Tuple{Vector{BaseOperator}, Any}[]
+                for (bares, c) in result_terms
+                    T1 = LieAlgebraGenerator(op.name, algebra_id, SU2_SIGMA_X_INDEX, op.inds)
+                    T2 = LieAlgebraGenerator(op.name, algebra_id, SU2_SIGMA_Y_INDEX, op.inds)
+                    push!(new_result, (vcat(bares, [T1]), c))
+                    push!(new_result, (vcat(bares, [T2]), c * (-1im)))
+                end
+                result_terms = new_result
+            else
+                # Non-TLS operator, keep as-is
+                new_result = Tuple{Vector{BaseOperator}, Any}[]
+                for (bares, c) in result_terms
+                    push!(new_result, (vcat(bares, [op]), c))
+                end
+                result_terms = new_result
+            end
+        end
+        
+        # Convert to QuTerms
+        output = Tuple{QuTerm, Any}[]
+        for (bares, c) in result_terms
+            new_term = QuTerm(term.nsuminds, term.δs, term.params, term.expvals, term.corrs, BaseOpProduct(bares))
+            push!(output, (new_term, c))
+        end
+        return output
+    end
+end
+
+"""
+    su2_to_tls(A::QuExpr; name::Symbol=:σ)
+
+Convert SU(2) generators in expression A to TLS (Pauli) operators.
+
+The conversion uses: T^a = σ^a/2, so:
+- T¹ → σˣ/2
+- T² → σʸ/2
+- T³ → σᶻ/2
+
+The `name` keyword specifies the TLS operator name (default :σ).
+The result respects the current TLS representation mode (use_σpm vs use_σxyz).
+
+# Example
+```julia
+T = su_generators(2, :T)
+su2_to_tls(T[1])  # => 1//2 σˣ (or 1//2 σ⁺ + 1//2 σ⁻ in σpm mode)
+su2_to_tls(T[1] * T[2])  # => 1//4 σˣ σʸ
+```
+"""
+function su2_to_tls(A::QuExpr; name::Symbol=:σ)
+    result = QuExpr()
+    for (term, coeff) in A.terms
+        term_result = _su2_to_tls_term_expr(term, coeff, name)
+        for (t, s) in term_result.terms
+            _add_sum_term!(result, t, s)
+        end
+    end
+    result
+end
+
+# Helper that returns QuExpr, respecting current TLS mode
+function _su2_to_tls_term_expr(term::QuTerm, coeff, tls_name::Symbol)
+    # Check if there are any SU(2) generators to convert
+    has_su2 = any(op -> op.t == LieAlgebraGen_ && op.algebra_id == UInt16(1), term.bares.v)
+    if !has_su2
+        return QuExpr(((term, coeff),))
+    end
+    
+    # Build expression by multiplying terms
+    # Start with all non-SU(2) operators and params
+    non_su2_bares = filter(op -> !(op.t == LieAlgebraGen_ && op.algebra_id == UInt16(1)), term.bares.v)
+    base_term = QuTerm(term.nsuminds, term.δs, term.params, term.expvals, term.corrs, BaseOpProduct(non_su2_bares))
+    result = QuExpr(((base_term, coeff),))
+    
+    # Multiply by each SU(2) generator converted to TLS
+    for op in term.bares.v
+        if op.t == LieAlgebraGen_ && op.algebra_id == UInt16(1)
+            # Get the TLS expression (respects current mode via σx, σy, σz functions)
+            # Only pass indices if they exist; the name is determined by the σx/σy/σz constructor
+            tls_expr = if op.gen_idx == SU2_SIGMA_X_INDEX
+                isempty(op.inds) ? 1//2 * σx() : 1//2 * σx(op.inds...)
+            elseif op.gen_idx == SU2_SIGMA_Y_INDEX
+                isempty(op.inds) ? 1//2 * σy() : 1//2 * σy(op.inds...)
+            elseif op.gen_idx == SU2_SIGMA_Z_INDEX
+                isempty(op.inds) ? 1//2 * σz() : 1//2 * σz(op.inds...)
+            else
+                error("Invalid SU(2) generator index: $(op.gen_idx)")
+            end
+            result = result * tls_expr
+        end
+    end
+    
+    result
+end
+
+# ============================================================================
+# SU(2) Ladder Operators
+# ============================================================================
+#
+# For SU(2), the ladder operators are defined as:
+#   T⁺ = T¹ + iT²  (raising operator)
+#   T⁻ = T¹ - iT²  (lowering operator)
+#
+# These are analogous to σ⁺ = (σˣ + iσʸ)/2 and σ⁻ = (σˣ - iσʸ)/2 for TLS.
+# Note: T⁺ = σ⁺ and T⁻ = σ⁻ (not scaled by 2!)
+
+export su2_raising, su2_lowering
+
+"""
+    su2_raising(name::Symbol=:T, inds...)
+
+Create the SU(2) raising operator T⁺ = T¹ + iT².
+
+This operator raises the eigenvalue of T³ by 1 (within the representation).
+It is analogous to σ⁺ for TLS operators.
+
+# Example
+```julia
+Tp = su2_raising(:T)
+Tm = su2_lowering(:T)
+comm(T³, Tp)  # => Tp (raising operator has eigenvalue +1 under T³)
+comm(Tp, Tm)  # => 2T³
+```
+"""
+function su2_raising(name::Symbol=:T, inds...)
+    T = su_generators(2, name, inds...)
+    T[1] + 1im * T[2]
+end
+
+"""
+    su2_lowering(name::Symbol=:T, inds...)
+
+Create the SU(2) lowering operator T⁻ = T¹ - iT².
+
+This operator lowers the eigenvalue of T³ by 1 (within the representation).
+It is analogous to σ⁻ for TLS operators.
+
+# Example
+```julia
+Tp = su2_raising(:T)
+Tm = su2_lowering(:T)
+comm(T³, Tm)  # => -Tm (lowering operator has eigenvalue -1 under T³)
+Tm * |0⟩ = 0  # annihilates the lowest weight state
+```
+"""
+function su2_lowering(name::Symbol=:T, inds...)
+    T = su_generators(2, name, inds...)
+    T[1] - 1im * T[2]
+end
+
+"""
+    su2_ladder_operators(name::Symbol=:T, inds...)
+
+Return a tuple (T⁺, T⁻, T³) of SU(2) ladder operators and the diagonal generator.
+
+This is convenient for working in the ladder operator basis.
+
+# Example
+```julia
+Tp, Tm, Tz = su2_ladder_operators(:T)
+# Commutation relations:
+comm(Tz, Tp)  # => Tp
+comm(Tz, Tm)  # => -Tm
+comm(Tp, Tm)  # => 2Tz
+```
+"""
+function su2_ladder_operators(name::Symbol=:T, inds...)
+    T = su_generators(2, name, inds...)
+    Tp = T[1] + 1im * T[2]
+    Tm = T[1] - 1im * T[2]
+    Tz = T[3]
+    (Tp, Tm, Tz)
+end
+
+export su2_ladder_operators

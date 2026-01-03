@@ -2,6 +2,7 @@ using QuantumAlgebra
 using QuantumAlgebra: δ, QuExpr, QuTerm, BaseOpProduct, BaseOperator, Param, QuIndex, _map_quexpr_ops, TLSx, TLSCreate, is_normal_form
 using QuantumAlgebra: expheis, corrheis, _lindbladterm, ExpVal, Corr, to_opprod
 using Test, Documenter
+using LinearAlgebra: tr
 import Symbolics
 import SymPyPythonCall
 
@@ -528,6 +529,9 @@ end
             end
         end
     end
+
+    # SU(N) Lie Algebra tests are in a separate file
+    include("test_lie_algebra.jl")
 
     @testset "QuEqSys" begin
         H = ∑(:i,Pr"ω_i"*a'(:i)*a(:i))

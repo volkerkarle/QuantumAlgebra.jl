@@ -3,6 +3,7 @@ module QuantumAlgebra
 using PackageExtensionCompat
 
 include("tools.jl")
+include("lie_algebra.jl")  # Lie algebra infrastructure (before operator_defs)
 include("operator_defs.jl")
 include("index_handling.jl")
 include("operator_baseops.jl")
@@ -18,6 +19,9 @@ include("precompile.jl")
 
 function __init__()
     @require_extensions
+
+    # Initialize Lie algebra registry (SU(2) as ID 1)
+    __init_algebra_registry__()
 
     auto_normal = @load_preference("auto_normal_form", false)
     if haskey(ENV,"QUANTUMALGEBRA_AUTO_NORMAL_FORM")
