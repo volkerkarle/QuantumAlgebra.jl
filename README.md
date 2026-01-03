@@ -7,6 +7,12 @@
 [![Binder](https://mybinder.org/badge_logo.svg)](https://mybinder.org/v2/gh/jfeist/QuantumAlgebra.jl/main?filepath=examples)
 [![DOI](https://zenodo.org/badge/211471154.svg)](https://zenodo.org/badge/latestdoi/211471154)
 
+> **Note:** This fork includes an experimental SU(N) Lie algebra extension for
+> n-level quantum systems (qudits). The extension is currently undergoing testing
+> and may be submitted as a pull request to the upstream repository after
+> thorough validation. See the [SU(N) Generators](#sun-generators) section below
+> for details.
+
 This package does quantum operator algebra (i.e., algebra with non-commuting
 operators) in Julia, supporting bosonic, fermionic, and two-level system
 operators, with arbitrary names and indices, as well as sums over any of the
@@ -383,6 +389,48 @@ The basic functions to create QuantumAlgebra expressions (which are of type
   julia> σz()
   -1 + 2 σ⁺() σ⁻()
   ```
+
+### SU(N) Generators
+
+> **Experimental:** This feature is under active development and testing.
+
+This fork adds support for SU(N) Lie algebra generators, enabling work with
+n-level quantum systems (qudits) beyond two-level systems. The generators
+satisfy the standard SU(N) commutation and product relations:
+- `[T^a, T^b] = i f^{abc} T^c` (structure constants)
+- `T^a T^b = (1/2N) δ_{ab} I + (1/2)(d^{abc} + i f^{abc}) T^c`
+
+Basic functions:
+- `su_generator(N, name, gen_idx, inds...)` - Create a single SU(N) generator
+- `su_generators(N, name, inds...)` - Create all N²-1 generators as a tuple
+- `tls_to_su2(A)` / `su2_to_tls(A)` - Convert between TLS and SU(2) representations
+- `su2_raising(name, inds...)` / `su2_lowering(name, inds...)` - SU(2) ladder operators
+- `su2_ladder_operators(name, inds...)` - Returns (T⁺, T⁻, T³) tuple
+
+```julia
+julia> using QuantumAlgebra
+
+julia> T = su_generators(2, :T)  # SU(2) generators
+(T¹(), T²(), T³())
+
+julia> normal_form(comm(T[1], T[2]))  # [T¹, T²] = i T³
+1i T³()
+
+julia> λ = su_generators(3, :λ)  # SU(3) generators (8 Gell-Mann matrices)
+
+julia> normal_form(T[1] * T[1])  # T^a T^a = 1/4 for SU(2)
+1//4
+
+julia> tls_to_su2(σx())  # σˣ = 2T¹
+2 T¹()
+
+julia> Tp, Tm, Tz = su2_ladder_operators(:T)
+julia> normal_form(comm(Tp, Tm))  # [T⁺, T⁻] = 2T³
+2 T³()
+```
+
+SU(N) generators integrate with existing bosonic/fermionic operators and support
+all standard operations including sums, expectation values, and normal ordering.
 
 ### Preferences
 Several preferences changing the behavior of QuantumAlgebra can be set
