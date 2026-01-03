@@ -119,50 +119,119 @@ println("   $dλ7_dt")
 println()
 
 # =============================================================================
-# 5. Expectation Values and Correlations
+# 5. Computing Expectation Values in Excited States
 # =============================================================================
 
-println("5. Expectation Values and Correlations")
+println("5. Expectation Values in Excited States")
 println("-"^40)
 
-# Mixed atom-cavity correlations
-println("   Atom-cavity correlations:")
-corr1 = expval(a'() * λ[1])
-println("   ⟨a† λ¹⟩ = $corr1")
+# We use vacExpVal(A, S) to compute ⟨ψ|A|ψ⟩ where |ψ⟩ = S|vac⟩
+# For bosons: |n⟩ = (a†)^n / √(n!) |0⟩
 
-# Cumulant expansion
+println("   a) Fock states |n⟩ for cavity:")
+n̂ = a'() * a()
+
+# |1⟩ state
+S_fock1 = a'()
+println("      ⟨1|n̂|1⟩ = $(vacExpVal(n̂, S_fock1))")
+println("      ⟨1|a|1⟩ = $(vacExpVal(a(), S_fock1))")
+
+# |2⟩ state  
+S_fock2 = a'()^2 / sqrt(2)
+println("      ⟨2|n̂|2⟩ = $(vacExpVal(n̂, S_fock2))")
+println("      ⟨2|a†a†aa|2⟩ = $(vacExpVal(a'()^2 * a()^2, S_fock2))")
+
+# |3⟩ state
+S_fock3 = a'()^3 / sqrt(6)
+println("      ⟨3|n̂|3⟩ = $(vacExpVal(n̂, S_fock3))")
+println("      ⟨3|n̂²|3⟩ = $(vacExpVal(n̂^2, S_fock3))")
 println()
-println("   Cumulant expansion of ⟨a† λ¹ λ⁷⟩:")
-mixed_expval = expval_as_corrs(a'() * λ[1] * λ[7])
-println("   $mixed_expval")
+
+println("   b) Variance in Fock states (should be 0):")
+println("      ⟨2|(Δn)²|2⟩ = ⟨n²⟩ - ⟨n⟩² = $(vacExpVal(n̂^2, S_fock2)) - $(vacExpVal(n̂, S_fock2))² = 0")
+println()
+
+println("   c) Mixed boson-atom expectation values:")
+# Cavity in |1⟩, atom in vacuum |3⟩
+println("      Create state: |ψ⟩ = a†|0⟩ ⊗ |3⟩_atom")
+println("      ⟨ψ| a†λ¹a |ψ⟩ = $(vacExpVal(a'() * λ[1] * a(), a'()))")
+println("      ⟨ψ| n̂ ⊗ λ⁸ |ψ⟩ = $(vacExpVal(n̂ * λ[8], a'()))")
+println("      ⟨ψ| a†λ⁸ + λ⁸a |ψ⟩ = $(vacExpVal(a'()*λ[8] + λ[8]*a(), a'()))")
+println()
+
+println("   d) Higher Fock state with atom:")
+# |n=2⟩ ⊗ |3⟩
+println("      State: |ψ⟩ = (a†)²/√2 |0⟩ ⊗ |3⟩_atom")
+println("      ⟨ψ| n̂ ⊗ λ⁸ |ψ⟩ = $(vacExpVal(n̂ * λ[8], S_fock2))")
+println("      ⟨ψ| (a†a)² ⊗ (λ⁸)² |ψ⟩ = $(vacExpVal(n̂^2 * λ[8]^2, S_fock2))")
 println()
 
 # =============================================================================
-# 6. Vacuum Expectation Values
+# 6. Cumulant Expansions and Correlations
 # =============================================================================
 
-println("6. Vacuum Expectation Values")
+println("6. Cumulant Expansions and Correlations")
 println("-"^40)
-println("   (Vacuum = lowest weight state |N⟩, i.e., |3⟩ for SU(3), |0⟩ for bosons)")
+
+# The cumulant expansion decomposes ⟨ABC...⟩ into products of correlators
+println("   Cumulant expansion ⟨AB⟩ = ⟨A⟩⟨B⟩ + ⟨AB⟩c:")
+println()
+
+# Two-operator expansion
+expr_2op = a'() * λ[1]
+println("   ⟨a† λ¹⟩ expands to:")
+println("      $(expval_as_corrs(expr_2op))")
+println()
+
+# Three-operator expansion  
+expr_3op = a'() * a() * λ[1]
+println("   ⟨a†a λ¹⟩ expands to:")
+println("      $(expval_as_corrs(expr_3op))")
+println()
+
+# Four-operator mixed expansion
+expr_4op = a'() * a() * λ[1] * λ[7]
+println("   ⟨a†a λ¹λ⁷⟩ expands to:")
+println("      $(expval_as_corrs(expr_4op))")
+println()
+
+# =============================================================================
+# 7. Vacuum State Properties
+# =============================================================================
+
+println("7. Vacuum State Properties")
+println("-"^40)
+println("   Vacuum = |0⟩_boson ⊗ |3⟩_atom (lowest weight state for SU(3))")
 println()
 
 # For SU(3), vacuum is the lowest weight state |3⟩
 # The diagonal generator λ⁸ has ⟨3|λ⁸|3⟩ = -1/√3 ≈ -0.577
+println("   Diagonal generators in vacuum:")
 println("   ⟨vac| λ⁷ |vac⟩ = $(vacExpVal(λ[7]))")
 println("   ⟨vac| λ⁸ |vac⟩ = $(vacExpVal(λ[8]))  (= -1/√3)")
-println("   ⟨vac| λ¹ |vac⟩ = $(vacExpVal(λ[1]))")  # Off-diagonal → 0
 println()
 
-# Mixed vacuum expectation values
-println("   ⟨vac| a† a |vac⟩ = $(vacExpVal(a'() * a()))")
-println("   ⟨vac| λ¹ λ¹ |vac⟩ = $(vacExpVal(λ[1] * λ[1]))")
+println("   Off-diagonal generators (transitions) in vacuum:")
+println("   ⟨vac| λ¹ |vac⟩ = $(vacExpVal(λ[1]))")
+println("   ⟨vac| λ⁴ |vac⟩ = $(vacExpVal(λ[4]))")
+println()
+
+println("   Products of generators in vacuum:")
+println("   ⟨vac| λ¹λ¹ |vac⟩ = $(vacExpVal(λ[1] * λ[1]))")
+println("   ⟨vac| λ⁷λ⁷ |vac⟩ = $(vacExpVal(λ[7] * λ[7]))")
+println("   ⟨vac| λ⁸λ⁸ |vac⟩ = $(vacExpVal(λ[8] * λ[8]))  (= 1/3)")
+println()
+
+println("   Bosonic vacuum:")
+println("   ⟨vac| a†a |vac⟩ = $(vacExpVal(a'() * a()))")
+println("   ⟨vac| aa† |vac⟩ = $(vacExpVal(a() * a'()))")
 println()
 
 # =============================================================================
-# 7. SU(3) Algebra Properties
+# 8. SU(3) Algebra Properties
 # =============================================================================
 
-println("7. SU(3) Algebra Properties")
+println("8. SU(3) Algebra Properties")
 println("-"^40)
 
 # Casimir operator: C₂ = Σₐ λᵃ λᵃ
@@ -180,10 +249,10 @@ println("   {λ¹, λ²} = $anticomm")
 println()
 
 # =============================================================================
-# 8. Sums over Indices
+# 9. Sums over Site Indices
 # =============================================================================
 
-println("8. Sums over Site Indices")
+println("9. Sums over Site Indices")
 println("-"^40)
 
 # Array of atoms, each with SU(3) structure
@@ -202,10 +271,10 @@ println("   = $H_collective")
 println()
 
 # =============================================================================
-# 9. Comparison: SU(2) ↔ TLS
+# 10. Comparison: SU(2) ↔ TLS
 # =============================================================================
 
-println("9. SU(2) ↔ TLS Correspondence")
+println("10. SU(2) ↔ TLS Correspondence")
 println("-"^40)
 
 # For comparison, show how SU(2) relates to TLS operators
@@ -229,10 +298,10 @@ println("   [T⁺, T⁻] = $(comm(Tplus, Tminus))")
 println()
 
 # =============================================================================
-# 10. Building Equations of Motion System
+# 11. Building Equations of Motion System
 # =============================================================================
 
-println("10. System of Equations for Mean-Field Dynamics")
+println("11. System of Equations for Mean-Field Dynamics")
 println("-"^40)
 
 # Simple mean-field Hamiltonian for demonstration
@@ -258,11 +327,13 @@ println("                          Example Complete!")
 println("="^70)
 println()
 println("This example demonstrated:")
-println("  - SU(3) generators for three-level atoms")
-println("  - Coupling to bosonic modes")
+println("  - SU(3) generators for three-level atoms (qutrits)")
+println("  - Coupling to bosonic cavity modes")
 println("  - Heisenberg equations of motion")
-println("  - Expectation values and correlations")
-println("  - Vacuum expectation values")
+println("  - Computing expectation values in Fock states")
+println("  - Mixed atom-photon expectation values")
+println("  - Cumulant expansions for correlations")
+println("  - Vacuum state properties")
 println("  - Sum notation for atom arrays")
-println("  - Comparison with SU(2)/TLS")
+println("  - SU(2)/TLS correspondence")
 println()
