@@ -1,5 +1,15 @@
 # Release notes
 
+## v1.6.1 (2026-01-04)
+This is a patch release with a new feature:
+- **Symbolic coefficients for SU(N) Lie algebra**: By default, SU(N) generator
+  products now use exact Rational coefficients (e.g., `1//2`, `1//6`) instead of
+  Float64 approximations. When [Symbolics.jl](https://github.com/JuliaSymbolics/Symbolics.jl)
+  is loaded, coefficients involving √3 (common in SU(3)) are represented symbolically
+  as `sqrt(3)`. For performance-critical applications, float mode can be enabled with
+  `QuantumAlgebra.use_float_coefficients(true)`, which can also be made persistent
+  with the `set_preference=true` keyword argument.
+
 ## v1.6.0 (2025-12-05)
 This is a minor release with internal improvements and new features:
 - The internal storage of indices (`QuIndices`) can now be configured to use

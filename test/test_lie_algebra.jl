@@ -1058,6 +1058,46 @@ end
             # Rational × Rational
             @test normal_form((1//2) * T[1] * (1//2) * T[1]) ≈ QuExpr(1//16)
         end
+
+        @testset "Coefficient mode toggle" begin
+            # Test use_float_coefficients preference
+            @test !QuantumAlgebra.using_float_coefficients()  # Default is symbolic mode
+            
+            # SU(2) with symbolic mode - should give Rational
+            σ = su_generators(2, :σ_sym)
+            result = normal_form(σ[1] * σ[1])
+            coeffs = collect(values(result.terms))
+            @test coeffs[1] isa Rational || coeffs[1] isa Integer
+            @test coeffs[1] == 1//4
+            
+            # SU(2) product should give Complex{Rational}
+            result2 = normal_form(σ[1] * σ[2])
+            coeffs2 = collect(values(result2.terms))
+            @test coeffs2[1] isa Complex{<:Rational}
+            @test coeffs2[1] == (1//2)*im
+            
+            # Switch to float mode
+            QuantumAlgebra.use_float_coefficients(true)
+            @test QuantumAlgebra.using_float_coefficients()
+            
+            # Coefficient functions should return Float64
+            @test QuantumAlgebra._coeff_one_quarter() == 0.25
+            @test QuantumAlgebra._coeff_one_half() == 0.5
+            @test QuantumAlgebra.su3_id_coeff() ≈ 1/6
+            
+            # SU(3) with float mode - √3 terms should be Float64
+            λ = su_generators(3, :λ_float)
+            result3 = normal_form(λ[1] * λ[1])
+            # Check that coefficients exist (either float or rational after simplification)
+            @test !isempty(result3.terms)
+            
+            # Switch back to symbolic mode
+            QuantumAlgebra.use_float_coefficients(false)
+            @test !QuantumAlgebra.using_float_coefficients()
+            
+            # Verify symbolic mode is restored
+            @test QuantumAlgebra._coeff_one_quarter() == 1//4
+        end
     end
 
 end

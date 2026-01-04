@@ -34,6 +34,10 @@ function __init__()
     auto_normal_form(auto_normal)
 
     use_σpm(@load_preference("use_σpm", false))
+    
+    # Float coefficients default to false (symbolic/exact mode)
+    # Set to true for high-speed Float64 computations
+    use_float_coefficients(@load_preference("use_float_coefficients", false))
 end
 
 end # module

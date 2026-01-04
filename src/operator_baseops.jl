@@ -371,15 +371,25 @@ has_multi_ops(r::ExchangeResult) = !isempty(r.ops)
 # ContractionResult for operator products (simplification)
 # Supports the SU(N) product rule: T^a T^b = (1/2N)δ_{ab}I + (1/2)(d^{abc} + if^{abc})T^c
 # This can produce an identity term plus multiple generator terms
-struct ContractionResult
-    id_coeff::ComplexF64  # coefficient of identity term
-    ops::Vector{Tuple{ComplexF64, BaseOperator}}  # generator terms: (coefficient, operator)
+# Coefficients can be Float64/ComplexF64 (fast mode) or Rational/symbolic (exact mode)
+struct ContractionResult{T<:Number, S<:Number}
+    id_coeff::T  # coefficient of identity term
+    ops::Vector{Tuple{S, BaseOperator}}  # generator terms: (coefficient, operator)
 end
 
+# Constructor for flexible coefficient types
+ContractionResult(id_coeff::Number, ops::Vector{<:Tuple{<:Number, BaseOperator}}) = 
+    ContractionResult(id_coeff, ops)
+
 # Constructor for simple contractions (single operator or none)
-ContractionResult(id_coeff::Number, op::Union{Nothing,BaseOperator}) = 
-    op === nothing ? ContractionResult(ComplexF64(id_coeff), Tuple{ComplexF64, BaseOperator}[]) :
-                     ContractionResult(ComplexF64(0), [(ComplexF64(id_coeff), op)])
+function ContractionResult(id_coeff::Number, op::Union{Nothing,BaseOperator})
+    if op === nothing
+        return ContractionResult(id_coeff, Tuple{typeof(id_coeff), BaseOperator}[])
+    else
+        zero_coeff = zero(id_coeff)
+        return ContractionResult(zero_coeff, [(id_coeff, op)])
+    end
+end
 
 # Check if contraction produces only identity (no operators)
 is_identity_only(r::ContractionResult) = isempty(r.ops)
@@ -581,12 +591,12 @@ const ComplexInt = Complex{Int}
 const LegacyContractionResult = Tuple{Bool,ComplexInt,Union{BaseOperator,Nothing}}
 
 # SU(2) inline contraction result: (true, :su2_inline, id_coeff, gen_term_or_nothing)
-const SU2InlineContractionResult = Tuple{Bool, Symbol, Float64, Any}
+const SU2InlineContractionResult = Tuple{Bool, Symbol, Any, Any}
 
-# SU(3) inline contraction result: (true, :su3_inline, name, inds, entry::SU3ProductEntry)
-const SU3InlineContractionResult = Tuple{Bool, Symbol, QuOpName, Any, SU3ProductEntry}
+# SU(3) inline contraction result: (true, :su3_inline, name, inds, (id_coeff, c1, coeff1, c2, coeff2))
+const SU3InlineContractionResult = Tuple{Bool, Symbol, QuOpName, Any, Tuple}
 
-function _contract(A::BaseOperator,B::BaseOperator)::Union{LegacyContractionResult, Tuple{Bool, ContractionResult}, SU2InlineContractionResult, SU3InlineContractionResult}
+function _contract(A::BaseOperator,B::BaseOperator)::Union{LegacyContractionResult, Tuple{Bool, <:ContractionResult}, SU2InlineContractionResult, SU3InlineContractionResult}
     if A.t in (TLSCreate_,TLSDestroy_,FermionDestroy_,FermionCreate_) && A == B
         return (true,zero(ComplexInt),nothing)
     elseif A.t in (TLSx_,TLSy_,TLSz_) && B.t in (TLSx_,TLSy_,TLSz_) && A.name == B.name && A.inds == B.inds
@@ -660,14 +670,14 @@ function _contract_lie_algebra_generators(A::BaseOperator, B::BaseOperator)
     end
     
     # =========================================================================
-    # FAST PATH: SU(3) - use precomputed lookup table
+    # FAST PATH: SU(3) - use coefficient providers (symbolic or float)
     # =========================================================================
-    # Returns (true, :su3_inline, name, inds, entry::SU3ProductEntry)
-    # The entry contains id_coeff and up to 2 generator terms (c1, coeff1, c2, coeff2)
+    # Returns (true, :su3_inline, name, inds, (id_coeff, c1, coeff1, c2, coeff2))
+    # Coefficients are symbolic (Rational, √3) by default, Float64 in high-speed mode
     
     if A.algebra_id == SU3_ALGEBRA_ID
-        entry = su3_product_lookup(a, b)
-        return (true, :su3_inline, A.name, A.inds, entry)
+        coeffs = su3_product_coeffs(a, b)
+        return (true, :su3_inline, A.name, A.inds, coeffs)
     end
     
     # =========================================================================
@@ -677,27 +687,29 @@ function _contract_lie_algebra_generators(A::BaseOperator, B::BaseOperator)
     N = algebra_dim(alg)
     
     # Identity coefficient: (1/2N) δ_{ab}
-    id_coeff = a == b ? 1.0 / (2N) : 0.0
+    id_coeff = a == b ? sun_id_coeff(N) : (using_float_coefficients() ? 0.0 : 0)
     
     # Generator terms: (1/2)(d^{abc} + i f^{abc}) T^c
     d_ab = symmetric_structure_constants(alg, a, b)
     f_ab = structure_constants(alg, a, b)
     
     # Combine d and f structure constants
-    gen_coeffs = Dict{Int, ComplexF64}()
+    # Note: structure constants are currently Float64; future work could make them symbolic
+    half = sun_gen_coeff()
+    gen_coeffs = Dict{Int, Number}()
     
     for (c, d_abc) in d_ab
-        gen_coeffs[c] = get(gen_coeffs, c, 0.0im) + d_abc / 2
+        gen_coeffs[c] = get(gen_coeffs, c, zero(half)) + d_abc * half
     end
     
     for (c, f_abc) in f_ab
-        gen_coeffs[c] = get(gen_coeffs, c, 0.0im) + im * f_abc / 2
+        gen_coeffs[c] = get(gen_coeffs, c, zero(half) * im) + im * f_abc * half
     end
     
     # Build the operator list
-    ops = Tuple{ComplexF64, BaseOperator}[]
+    ops = Tuple{Number, BaseOperator}[]
     for (c, coeff) in gen_coeffs
-        if abs(coeff) > 1e-12
+        if !iszero(coeff)
             new_op = LieAlgebraGenerator(A.name, A.algebra_id, c, A.inds)
             push!(ops, (coeff, new_op))
         end
@@ -714,8 +726,9 @@ function normal_order!(ops::BaseOpProduct,term_collector,shortcut_vacA_zero=fals
     # do an insertion sort to get to normal ordering
     # reference: https://en.wikipedia.org/wiki/Insertion_sort
     A = ops.v
-    # Use ComplexF64 for prefactor to support fractional coefficients from SU(N)
-    prefactor::ComplexF64 = one(ComplexF64)
+    # prefactor starts as 1, but can become any Number type through multiplications
+    # (e.g., ComplexF64, Rational, or symbolic types when Symbolics.jl is loaded)
+    prefactor::Number = 1
     for i = 2:length(A)
         j = i
         while j>1 && A[j]<A[j-1]
@@ -802,56 +815,56 @@ function normal_order!(ops::BaseOpProduct,term_collector,shortcut_vacA_zero=fals
                 end
                 iszero(prefactor) && return prefactor
                 k > 1 && (k -= 1)
-            elseif contract_result isa Tuple{Bool, Symbol, QuOpName, Any, SU3ProductEntry} && 
+            elseif contract_result isa Tuple{Bool, Symbol, QuOpName, Any, Tuple} && 
                    contract_result[2] === :su3_inline
                 # =========================================================
-                # FAST PATH: SU(3) precomputed lookup
-                # Format: (true, :su3_inline, name, inds, entry::SU3ProductEntry)
+                # FAST PATH: SU(3) symbolic/float coefficients
+                # Format: (true, :su3_inline, name, inds, (id_coeff, c1, coeff1, c2, coeff2))
                 # =========================================================
                 name = contract_result[3]
                 inds = contract_result[4]
-                entry = contract_result[5]
+                id_coeff, c1, coeff1, c2, coeff2 = contract_result[5]
                 
-                if entry.c2 == 0
+                if c2 == 0
                     # Single generator term - can partially inline
-                    if abs(entry.id_coeff) > 1e-12
+                    if !iszero(id_coeff)
                         # Add identity term to collector
                         remaining_ops = [A[1:k-1]; A[k+2:end]]
                         onew = BaseOpProduct(remaining_ops)
                         t = QuTerm(onew)
-                        _add_sum_term!(term_collector, t, entry.id_coeff * prefactor)
+                        _add_sum_term!(term_collector, t, id_coeff * prefactor)
                     end
                     # Inline the generator term: multiply coeff into prefactor, replace pair
-                    prefactor *= entry.coeff1
-                    new_op = LieAlgebraGenerator(name, SU3_ALGEBRA_ID, Int(entry.c1), inds)
+                    prefactor *= coeff1
+                    new_op = LieAlgebraGenerator(name, SU3_ALGEBRA_ID, Int(c1), inds)
                     A[k] = new_op
                     deleteat!(A, k+1)
                     iszero(prefactor) && return prefactor
                     k > 1 && (k -= 1)
                 else
                     # Two generator terms - add all to collector, zero out main term
-                    if abs(entry.id_coeff) > 1e-12
+                    if !iszero(id_coeff)
                         remaining_ops = [A[1:k-1]; A[k+2:end]]
                         onew = BaseOpProduct(remaining_ops)
                         t = QuTerm(onew)
-                        _add_sum_term!(term_collector, t, entry.id_coeff * prefactor)
+                        _add_sum_term!(term_collector, t, id_coeff * prefactor)
                     end
                     
                     # Add first generator term
-                    op1 = LieAlgebraGenerator(name, SU3_ALGEBRA_ID, Int(entry.c1), inds)
+                    op1 = LieAlgebraGenerator(name, SU3_ALGEBRA_ID, Int(c1), inds)
                     onew1 = BaseOpProduct([A[1:k-1]; op1; A[k+2:end]])
-                    _add_sum_term!(term_collector, QuTerm(onew1), entry.coeff1 * prefactor)
+                    _add_sum_term!(term_collector, QuTerm(onew1), coeff1 * prefactor)
                     
                     # Add second generator term
-                    op2 = LieAlgebraGenerator(name, SU3_ALGEBRA_ID, Int(entry.c2), inds)
+                    op2 = LieAlgebraGenerator(name, SU3_ALGEBRA_ID, Int(c2), inds)
                     onew2 = BaseOpProduct([A[1:k-1]; op2; A[k+2:end]])
-                    _add_sum_term!(term_collector, QuTerm(onew2), entry.coeff2 * prefactor)
+                    _add_sum_term!(term_collector, QuTerm(onew2), coeff2 * prefactor)
                     
                     # Remove contracted pair and return zero (all terms in collector)
                     deleteat!(A, (k, k+1))
                     return zero(prefactor)
                 end
-            elseif contract_result isa Tuple{Bool, ContractionResult}
+            elseif contract_result isa Tuple{Bool, <:ContractionResult}
                 # Lie algebra generator contraction (multi-term result) - SU(N) with N > 2
                 result = contract_result[2]
                 
@@ -859,7 +872,7 @@ function normal_order!(ops::BaseOpProduct,term_collector,shortcut_vacA_zero=fals
                 # and then signal that this product should be zeroed out
                 
                 # Add identity term if present: id_coeff * (remaining operators)
-                if abs(result.id_coeff) > 1e-12
+                if !iszero(result.id_coeff)
                     remaining_ops = [A[1:k-1]; A[k+2:end]]
                     onew = BaseOpProduct(remaining_ops)
                     t = QuTerm(onew)

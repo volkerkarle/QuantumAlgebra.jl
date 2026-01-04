@@ -69,6 +69,17 @@ function auto_normal_form(t::Bool=true; set_preference=false)
 end
 using_auto_normal_form() = _auto_normal_form[]
 
+# High-speed mode: use Float64 coefficients instead of symbolic (Rational/√3)
+# Default is false (symbolic mode), which gives exact results
+# Set to true for faster computation with floating-point approximations
+const _use_float_coefficients = Ref(false)
+function use_float_coefficients(t::Bool=true; set_preference=false)
+    _use_float_coefficients[] = t
+    set_preference && @set_preferences!("use_float_coefficients" => t)
+    nothing
+end
+using_float_coefficients() = _use_float_coefficients[]
+
 const IndexInt = Int32
 
 @concrete struct QuIndex

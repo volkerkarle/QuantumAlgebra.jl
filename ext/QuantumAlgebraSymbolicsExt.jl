@@ -24,4 +24,16 @@ for T in (Any,Pair,Vector)
     end
 end
 
+# ============================================================================
+# Symbolic √3 coefficient for SU(3) Lie algebra
+# ============================================================================
+#
+# When Symbolics.jl is loaded, register a provider for symbolic √3
+# for exact coefficient representation in SU(3) computations.
+
+function __init__()
+    # Register the symbolic √3 provider at runtime
+    QuantumAlgebra.set_symbolic_sqrt3_provider(() -> sqrt(Num(3)))
+end
+
 end

@@ -432,6 +432,39 @@ julia> normal_form(comm(Tp, Tm))  # [T⁺, T⁻] = 2T³
 SU(N) generators integrate with existing bosonic/fermionic operators and support
 all standard operations including sums, expectation values, and normal ordering.
 
+#### Symbolic Coefficients for SU(N)
+
+By default, SU(N) computations use exact rational coefficients (e.g., `1//4`, `1//6`)
+instead of floating-point approximations. For SU(3) and higher, coefficients involving
+√3 are represented symbolically when [Symbolics.jl](https://github.com/JuliaSymbolics/Symbolics.jl)
+is loaded:
+
+```julia
+julia> using QuantumAlgebra, Symbolics
+
+julia> λ = su_generators(3, :λ)
+
+julia> normal_form(λ[1] * λ[1])  # Exact: 1/6 + (√3/6)λ⁸
+1//6 + sqrt(3) / 6 λ⁸
+
+julia> normal_form(λ[1] * λ[2])  # Rational coefficients
+1//4 λ³ + 1//4i λ⁶
+```
+
+For high-performance scenarios where floating-point arithmetic is preferred,
+you can switch to float mode:
+
+```julia
+julia> QuantumAlgebra.use_float_coefficients(true)
+
+julia> normal_form(λ[1] * λ[1])  # Float64 coefficients
+0.166667 + 0.288675 λ⁸
+
+julia> QuantumAlgebra.use_float_coefficients(false)  # Switch back to exact mode
+```
+
+This setting can be made permanent with `QuantumAlgebra.use_float_coefficients(true; set_preference=true)`.
+
 ### Preferences
 Several preferences changing the behavior of QuantumAlgebra can be set
 permanently (this uses [Preferences.jl](https://github.com/JuliaPackaging/Preferences.jl)):
