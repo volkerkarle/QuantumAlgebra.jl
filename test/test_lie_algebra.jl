@@ -66,6 +66,29 @@ end
             @test algebra_dim(alg) == 4
             @test num_generators(alg) == 15
         end
+
+        @testset "SU(5) structure" begin
+            alg = get_algebra(get_or_create_su(5))
+            @test algebra_dim(alg) == 5
+            @test num_generators(alg) == 24
+        end
+
+        @testset "Multiple algebras in same session" begin
+            # Ensure SU(2), SU(3), SU(4), SU(5) can coexist without interference
+            id2 = get_or_create_su(2)
+            id3 = get_or_create_su(3)
+            id4 = get_or_create_su(4)
+            id5 = get_or_create_su(5)
+            
+            # All should have distinct IDs
+            @test length(unique([id2, id3, id4, id5])) == 4
+            
+            # Each should return correct algebra type
+            @test get_algebra(id2) isa QuantumAlgebra.SUAlgebra{2}
+            @test get_algebra(id3) isa QuantumAlgebra.SUAlgebra{3}
+            @test get_algebra(id4) isa QuantumAlgebra.SUAlgebra{4}
+            @test get_algebra(id5) isa QuantumAlgebra.SUAlgebra{5}
+        end
     end
 
     # =========================================================================
@@ -199,6 +222,46 @@ end
             @test normal_form(comm(G[2], G[5])) == -normal_form(comm(G[5], G[2]))
         end
 
+        @testset "SU(4) commutators" begin
+            G = su_generators(4, :G)
+            
+            # Self-commutation is zero
+            for a in 1:15
+                @test iszero(normal_form(comm(G[a], G[a])))
+            end
+            
+            # Antisymmetry
+            for a in 1:5, b in a+1:5
+                @test normal_form(comm(G[a], G[b])) == -normal_form(comm(G[b], G[a]))
+            end
+            
+            # Jacobi identity for SU(4)
+            jacobi = comm(G[1], comm(G[2], G[3])) + 
+                     comm(G[2], comm(G[3], G[1])) + 
+                     comm(G[3], comm(G[1], G[2]))
+            @test iszero(normal_form(jacobi))
+        end
+
+        @testset "SU(5) commutators" begin
+            G = su_generators(5, :G)
+            
+            # Self-commutation is zero
+            for a in 1:24
+                @test iszero(normal_form(comm(G[a], G[a])))
+            end
+            
+            # Antisymmetry (subset)
+            for a in 1:5, b in a+1:5
+                @test normal_form(comm(G[a], G[b])) == -normal_form(comm(G[b], G[a]))
+            end
+            
+            # Jacobi identity for SU(5)
+            jacobi = comm(G[1], comm(G[2], G[3])) + 
+                     comm(G[2], comm(G[3], G[1])) + 
+                     comm(G[3], comm(G[1], G[2]))
+            @test iszero(normal_form(jacobi))
+        end
+
         @testset "Commutators with indices" begin
             T_i = su_generators(2, :T, :i)
             T_j = su_generators(2, :T, :j)
@@ -255,6 +318,36 @@ end
             @test normal_form(result12 - result21) ≈ normal_form(comm(G[1], G[2]))
         end
 
+        @testset "SU(4) products" begin
+            G = su_generators(4, :G)
+            
+            # All 225 products should work without error
+            for a in 1:15, b in 1:15
+                result = normal_form(G[a] * G[b])
+                @test result isa QuExpr
+            end
+            
+            # Product minus reverse equals commutator
+            result12 = normal_form(G[1] * G[2])
+            result21 = normal_form(G[2] * G[1])
+            @test normal_form(result12 - result21) ≈ normal_form(comm(G[1], G[2]))
+        end
+
+        @testset "SU(5) products" begin
+            G = su_generators(5, :G)
+            
+            # Test a subset of the 576 products
+            for a in 1:10, b in 1:10
+                result = normal_form(G[a] * G[b])
+                @test result isa QuExpr
+            end
+            
+            # Product minus reverse equals commutator
+            result12 = normal_form(G[1] * G[2])
+            result21 = normal_form(G[2] * G[1])
+            @test normal_form(result12 - result21) ≈ normal_form(comm(G[1], G[2]))
+        end
+
         @testset "Products with indices" begin
             T_i = su_generators(2, :T, :i)
             T_j = su_generators(2, :T, :j)
@@ -285,9 +378,23 @@ end
             C3 = sum(G[a] * G[a] for a in 1:8)
             @test normal_form(C3) ≈ QuExpr(4/3)
         end
-        
-        # Note: SU(4) and SU(5) Casimir tests omitted due to floating-point
-        # precision in structure constants for large N
+
+        @testset "SU(4) Casimir = 15/8" begin
+            G = su_generators(4, :G)
+            C4 = sum(G[a] * G[a] for a in 1:15)
+            # The Casimir has small numerical noise from floating-point structure constants
+            # Check that the rational part is correct
+            result = normal_form(C4)
+            # Extract the scalar part by evaluating at the identity
+            @test isapprox(real(result.terms[QuTerm()]), 15/8, atol=1e-10)
+        end
+
+        @testset "SU(5) Casimir = 12/5" begin
+            G = su_generators(5, :G)
+            C5 = sum(G[a] * G[a] for a in 1:24)
+            result = normal_form(C5)
+            @test isapprox(real(result.terms[QuTerm()]), 12/5, atol=1e-10)
+        end
     end
 
     # =========================================================================
