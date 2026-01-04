@@ -377,406 +377,93 @@ Uses the same Levi-Civita lookup as the TLS implementation.
 end
 
 # ============================================================================
-# Symbolic Coefficient Providers
+# Symbolic Coefficient System
 # ============================================================================
 #
-# These functions provide the exact coefficients for SU(N) algebra computations.
-# By default, they return Rational numbers (and symbolic √3 when Symbolics.jl is loaded).
-# In "float mode" (use_float_coefficients(true)), they return Float64 for faster computation.
-#
-# The extension QuantumAlgebraSymbolicsExt overrides these to provide symbolic √3.
+# Provides exact coefficients for SU(N) algebra computations.
+# Default: Rational numbers + symbolic √3 (when Symbolics.jl loaded)
+# Float mode: Float64 for speed (use_float_coefficients(true))
 
-# --- Coefficient type selection ---
-# When float mode is enabled, use Float64; otherwise use Rational for exact arithmetic
-_coeff_one_half() = using_float_coefficients() ? 0.5 : 1//2
-_coeff_one_quarter() = using_float_coefficients() ? 0.25 : 1//4
-_coeff_one_sixth() = using_float_coefficients() ? 0.16666666666666666 : 1//6
-
-# --- SU(2) coefficients ---
-# T^a T^b = (1/4)δ_{ab}I + (i/2)ε_{abc}T^c
-su2_id_coeff() = _coeff_one_quarter()        # 1/4
-su2_gen_coeff() = _coeff_one_half()          # 1/2 (multiplied by im and sign)
-
-# --- SU(3) coefficients ---
-# λ^a λ^b = (1/6)δ_{ab}I + (1/2)(d^{abc} + i f^{abc})λ^c
-su3_id_coeff() = _coeff_one_sixth()          # 1/6
-
-# Coefficients involving √3 - uses symbolic provider if available
-# The _symbolic_sqrt3_provider Ref can be set by extensions (e.g., QuantumAlgebraSymbolicsExt)
-# to provide symbolic √3 instead of Float64
+# Symbolic √3 provider - set by QuantumAlgebraSymbolicsExt
 const _symbolic_sqrt3_provider = Ref{Union{Nothing, Function}}(nothing)
-
-"""
-    su3_sqrt3_coeff()
-
-Returns √3 for SU(3) structure constants.
-In float mode, returns Float64. When Symbolics.jl is loaded and symbolic mode is active,
-returns symbolic √3.
-"""
-function su3_sqrt3_coeff()
-    if using_float_coefficients()
-        return 1.7320508075688772  # Float64 √3
-    elseif _symbolic_sqrt3_provider[] !== nothing
-        return _symbolic_sqrt3_provider[]()  # Call the symbolic provider
-    else
-        return 1.7320508075688772  # Fallback to Float64
-    end
-end
-
-"""
-    set_symbolic_sqrt3_provider(f::Function)
-
-Set the function that provides symbolic √3. Called by extensions like QuantumAlgebraSymbolicsExt.
-The function should take no arguments and return a symbolic representation of √3.
-"""
 set_symbolic_sqrt3_provider(f::Function) = (_symbolic_sqrt3_provider[] = f)
 set_symbolic_sqrt3_provider(::Nothing) = (_symbolic_sqrt3_provider[] = nothing)
 
-# Derived coefficients using √3
-su3_sqrt3_over_6() = using_float_coefficients() ? 0.28867513459481287 : su3_sqrt3_coeff() / 6     # √3/6 = 1/(2√3)
-su3_sqrt3_over_4() = using_float_coefficients() ? 0.4330127018922193 : su3_sqrt3_coeff() / 4      # √3/4
-su3_sqrt3_over_12() = using_float_coefficients() ? 0.14433756729740643 : su3_sqrt3_coeff() / 12   # √3/12 = 1/(4√3)
-
-# --- General SU(N) coefficients ---
-# T^a T^b = (1/2N)δ_{ab}I + (1/2)(d^{abc} + i f^{abc})T^c
-sun_id_coeff(N::Int) = using_float_coefficients() ? 1.0 / (2N) : 1 // (2N)
-sun_gen_coeff() = _coeff_one_half()          # 1/2
-
-"""
-    su2_product_result(a::Int, b::Int)
-
-Fast path for SU(2) product rule: T^a T^b = (1/4)δ_{ab} + (i/2)ε_{abc}T^c
-Returns (id_coeff, c, gen_coeff) where:
-- id_coeff is the coefficient of identity
-- c is the generator index (0 if none)
-- gen_coeff is the coefficient of T^c
-
-For SU(2) with normalization Tr(T^a T^b) = δ_{ab}/2:
-T^a T^b = (1/4)δ_{ab}I + (1/2)(d_{abc} + i f_{abc})T^c
-
-For SU(2), d_{abc} = 0 (no symmetric structure constants), so:
-T^a T^b = (1/4)δ_{ab}I + (i/2)f_{abc}T^c
-"""
-@inline function su2_product_result(a::Int, b::Int)
-    if a == b
-        # T^a T^a = (1/4)I (diagonal case)
-        id_c = su2_id_coeff()
-        return (id_c, 0, zero(id_c) * im)
+# Get √3 value (symbolic if available, else Float64)
+function _sqrt3()
+    if using_float_coefficients()
+        1.7320508075688772
+    elseif _symbolic_sqrt3_provider[] !== nothing
+        _symbolic_sqrt3_provider[]()
     else
-        c = 6 - a - b
-        # f_{abc} = ε_{abc}: cyclic permutations give +1
-        s = (a % 3 + 1 == b) ? 1 : -1
-        # T^a T^b = (i/2)ε_{abc}T^c
-        gen_c = su2_gen_coeff()
-        return (zero(gen_c), c, gen_c * im * s)
+        1.7320508075688772  # Fallback
     end
 end
 
+# SU(N) identity coefficient: 1/(2N), generator coefficient: 1/2
+sun_id_coeff(N::Int) = using_float_coefficients() ? 1.0 / (2N) : 1 // (2N)
+sun_gen_coeff() = using_float_coefficients() ? 0.5 : 1 // 2
+
 # ============================================================================
-# SU(3) Fast Path: Precomputed product lookup table
+# SU(3) Fast Path: Precomputed product coefficients
 # ============================================================================
-#
-# For SU(3), products λ^a λ^b produce 1-2 generator terms plus optional identity.
-# We precompute all 64 products to eliminate Dict allocations and structure
-# constant lookups at runtime.
-#
 # Product formula: λ^a λ^b = (1/6)δ_{ab}I + (1/2)(d^{abc} + i f^{abc})λ^c
+# Encoded as tuples: (has_id, c1, code1, c2, code2)
 
 const SU3_ALGEBRA_ID = UInt16(2)
 
-"""
-    SU3ProductEntry
-
-Precomputed result for λ^a λ^b product in SU(3).
-Stores identity coefficient and up to 2 generator terms.
-
-# Fields
-- `id_coeff::Float64`: Coefficient of identity (1/6 for a==b, 0 otherwise)
-- `c1::Int8`: First generator index (1-8)
-- `coeff1::ComplexF64`: Coefficient of first generator
-- `c2::Int8`: Second generator index (0 if single-term result)
-- `coeff2::ComplexF64`: Coefficient of second generator (0 if c2==0)
-"""
-struct SU3ProductEntry
-    id_coeff::Float64
-    c1::Int8
-    coeff1::ComplexF64
-    c2::Int8
-    coeff2::ComplexF64
-end
-
-# Precomputed constants for SU(3) structure constants
-# These appear frequently: 1/(2√3) = √3/6, √3/4, 1/(4√3) = √3/12
-const _SU3_INV_2SQRT3 = 0.28867513459481287   # 1/(2√3) = √3/6
-const _SU3_SQRT3_4 = 0.4330127018922193       # √3/4
-const _SU3_INV_4SQRT3 = 0.14433756729740643   # 1/(4√3) = √3/12
-const _SU3_ID_COEFF = 0.16666666666666666     # 1/6
-
-# Precomputed 8×8 lookup table for all SU(3) products
-# Generated from structure constants: λ^a λ^b = (1/6)δ_{ab}I + (1/2)(d^{abc} + if^{abc})λ^c
-# Entry format: SU3ProductEntry(id_coeff, c1, coeff1, c2, coeff2)
-const SU3_PRODUCTS = [
-    # Row 1: λ¹ × λʲ
-    SU3ProductEntry(_SU3_ID_COEFF, 8, _SU3_INV_2SQRT3+0im, 0, 0.0+0im)     # (1,1): 1/6 I + (√3/6)λ⁸
-    SU3ProductEntry(0.0, 3, 0.25+0im, 6, 0.25im)                           # (1,2): (1/4)λ³ + (i/4)λ⁶
-    SU3ProductEntry(0.0, 2, 0.25+0im, 5, 0.25im)                           # (1,3): (1/4)λ² + (i/4)λ⁵
-    SU3ProductEntry(0.0, 7, 0.5im, 0, 0.0+0im)                             # (1,4): (i/2)λ⁷
-    SU3ProductEntry(0.0, 3, -0.25im, 6, 0.25+0im)                          # (1,5): (-i/4)λ³ + (1/4)λ⁶
-    SU3ProductEntry(0.0, 2, -0.25im, 5, 0.25+0im)                          # (1,6): (-i/4)λ² + (1/4)λ⁵
-    SU3ProductEntry(0.0, 4, -0.5im, 0, 0.0+0im)                            # (1,7): (-i/2)λ⁴
-    SU3ProductEntry(0.0, 1, _SU3_INV_2SQRT3+0im, 0, 0.0+0im)               # (1,8): (√3/6)λ¹
-    ;; # Row 2: λ² × λʲ
-    SU3ProductEntry(0.0, 3, 0.25+0im, 6, -0.25im)                          # (2,1): (1/4)λ³ + (-i/4)λ⁶
-    SU3ProductEntry(_SU3_ID_COEFF, 7, 0.25+0im, 8, -_SU3_INV_4SQRT3+0im)   # (2,2): 1/6 I + (1/4)λ⁷ + (-√3/12)λ⁸
-    SU3ProductEntry(0.0, 1, 0.25+0im, 4, 0.25im)                           # (2,3): (1/4)λ¹ + (i/4)λ⁴
-    SU3ProductEntry(0.0, 3, -0.25im, 6, -0.25+0im)                         # (2,4): (-i/4)λ³ + (-1/4)λ⁶
-    SU3ProductEntry(0.0, 7, 0.25im, 8, _SU3_SQRT3_4*1im)                   # (2,5): (i/4)λ⁷ + (i√3/4)λ⁸
-    SU3ProductEntry(0.0, 1, 0.25im, 4, -0.25+0im)                          # (2,6): (i/4)λ¹ + (-1/4)λ⁴
-    SU3ProductEntry(0.0, 2, 0.25+0im, 5, -0.25im)                          # (2,7): (1/4)λ² + (-i/4)λ⁵
-    SU3ProductEntry(0.0, 2, -_SU3_INV_4SQRT3+0im, 5, -_SU3_SQRT3_4*1im)    # (2,8): (-√3/12)λ² + (-i√3/4)λ⁵
-    ;; # Row 3: λ³ × λʲ
-    SU3ProductEntry(0.0, 2, 0.25+0im, 5, -0.25im)                          # (3,1): (1/4)λ² + (-i/4)λ⁵
-    SU3ProductEntry(0.0, 1, 0.25+0im, 4, -0.25im)                          # (3,2): (1/4)λ¹ + (-i/4)λ⁴
-    SU3ProductEntry(_SU3_ID_COEFF, 7, -0.25+0im, 8, -_SU3_INV_4SQRT3+0im)  # (3,3): 1/6 I + (-1/4)λ⁷ + (-√3/12)λ⁸
-    SU3ProductEntry(0.0, 2, 0.25im, 5, 0.25+0im)                           # (3,4): (i/4)λ² + (1/4)λ⁵
-    SU3ProductEntry(0.0, 1, 0.25im, 4, 0.25+0im)                           # (3,5): (i/4)λ¹ + (1/4)λ⁴
-    SU3ProductEntry(0.0, 7, -0.25im, 8, _SU3_SQRT3_4*1im)                  # (3,6): (-i/4)λ⁷ + (i√3/4)λ⁸
-    SU3ProductEntry(0.0, 3, -0.25+0im, 6, 0.25im)                          # (3,7): (-1/4)λ³ + (i/4)λ⁶
-    SU3ProductEntry(0.0, 3, -_SU3_INV_4SQRT3+0im, 6, -_SU3_SQRT3_4*1im)    # (3,8): (-√3/12)λ³ + (-i√3/4)λ⁶
-    ;; # Row 4: λ⁴ × λʲ
-    SU3ProductEntry(0.0, 7, -0.5im, 0, 0.0+0im)                            # (4,1): (-i/2)λ⁷
-    SU3ProductEntry(0.0, 3, 0.25im, 6, -0.25+0im)                          # (4,2): (i/4)λ³ + (-1/4)λ⁶
-    SU3ProductEntry(0.0, 2, -0.25im, 5, 0.25+0im)                          # (4,3): (-i/4)λ² + (1/4)λ⁵
-    SU3ProductEntry(_SU3_ID_COEFF, 8, _SU3_INV_2SQRT3+0im, 0, 0.0+0im)     # (4,4): 1/6 I + (√3/6)λ⁸
-    SU3ProductEntry(0.0, 3, 0.25+0im, 6, 0.25im)                           # (4,5): (1/4)λ³ + (i/4)λ⁶
-    SU3ProductEntry(0.0, 2, -0.25+0im, 5, -0.25im)                         # (4,6): (-1/4)λ² + (-i/4)λ⁵
-    SU3ProductEntry(0.0, 1, 0.5im, 0, 0.0+0im)                             # (4,7): (i/2)λ¹
-    SU3ProductEntry(0.0, 4, _SU3_INV_2SQRT3+0im, 0, 0.0+0im)               # (4,8): (√3/6)λ⁴
-    ;; # Row 5: λ⁵ × λʲ
-    SU3ProductEntry(0.0, 3, 0.25im, 6, 0.25+0im)                           # (5,1): (i/4)λ³ + (1/4)λ⁶
-    SU3ProductEntry(0.0, 7, -0.25im, 8, -_SU3_SQRT3_4*1im)                 # (5,2): (-i/4)λ⁷ + (-i√3/4)λ⁸
-    SU3ProductEntry(0.0, 1, -0.25im, 4, 0.25+0im)                          # (5,3): (-i/4)λ¹ + (1/4)λ⁴
-    SU3ProductEntry(0.0, 3, 0.25+0im, 6, -0.25im)                          # (5,4): (1/4)λ³ + (-i/4)λ⁶
-    SU3ProductEntry(_SU3_ID_COEFF, 7, 0.25+0im, 8, -_SU3_INV_4SQRT3+0im)   # (5,5): 1/6 I + (1/4)λ⁷ + (-√3/12)λ⁸
-    SU3ProductEntry(0.0, 1, 0.25+0im, 4, 0.25im)                           # (5,6): (1/4)λ¹ + (i/4)λ⁴
-    SU3ProductEntry(0.0, 2, 0.25im, 5, 0.25+0im)                           # (5,7): (i/4)λ² + (1/4)λ⁵
-    SU3ProductEntry(0.0, 2, _SU3_SQRT3_4*1im, 5, -_SU3_INV_4SQRT3+0im)     # (5,8): (i√3/4)λ² + (-√3/12)λ⁵
-    ;; # Row 6: λ⁶ × λʲ
-    SU3ProductEntry(0.0, 2, 0.25im, 5, 0.25+0im)                           # (6,1): (i/4)λ² + (1/4)λ⁵
-    SU3ProductEntry(0.0, 1, -0.25im, 4, -0.25+0im)                         # (6,2): (-i/4)λ¹ + (-1/4)λ⁴
-    SU3ProductEntry(0.0, 7, 0.25im, 8, -_SU3_SQRT3_4*1im)                  # (6,3): (i/4)λ⁷ + (-i√3/4)λ⁸
-    SU3ProductEntry(0.0, 2, -0.25+0im, 5, 0.25im)                          # (6,4): (-1/4)λ² + (i/4)λ⁵
-    SU3ProductEntry(0.0, 1, 0.25+0im, 4, -0.25im)                          # (6,5): (1/4)λ¹ + (-i/4)λ⁴
-    SU3ProductEntry(_SU3_ID_COEFF, 7, -0.25+0im, 8, -_SU3_INV_4SQRT3+0im)  # (6,6): 1/6 I + (-1/4)λ⁷ + (-√3/12)λ⁸
-    SU3ProductEntry(0.0, 3, -0.25im, 6, -0.25+0im)                         # (6,7): (-i/4)λ³ + (-1/4)λ⁶
-    SU3ProductEntry(0.0, 3, _SU3_SQRT3_4*1im, 6, -_SU3_INV_4SQRT3+0im)     # (6,8): (i√3/4)λ³ + (-√3/12)λ⁶
-    ;; # Row 7: λ⁷ × λʲ
-    SU3ProductEntry(0.0, 4, 0.5im, 0, 0.0+0im)                             # (7,1): (i/2)λ⁴
-    SU3ProductEntry(0.0, 2, 0.25+0im, 5, 0.25im)                           # (7,2): (1/4)λ² + (i/4)λ⁵
-    SU3ProductEntry(0.0, 3, -0.25+0im, 6, -0.25im)                         # (7,3): (-1/4)λ³ + (-i/4)λ⁶
-    SU3ProductEntry(0.0, 1, -0.5im, 0, 0.0+0im)                            # (7,4): (-i/2)λ¹
-    SU3ProductEntry(0.0, 2, -0.25im, 5, 0.25+0im)                          # (7,5): (-i/4)λ² + (1/4)λ⁵
-    SU3ProductEntry(0.0, 3, 0.25im, 6, -0.25+0im)                          # (7,6): (i/4)λ³ + (-1/4)λ⁶
-    SU3ProductEntry(_SU3_ID_COEFF, 8, _SU3_INV_2SQRT3+0im, 0, 0.0+0im)     # (7,7): 1/6 I + (√3/6)λ⁸
-    SU3ProductEntry(0.0, 7, _SU3_INV_2SQRT3+0im, 0, 0.0+0im)               # (7,8): (√3/6)λ⁷
-    ;; # Row 8: λ⁸ × λʲ
-    SU3ProductEntry(0.0, 1, _SU3_INV_2SQRT3+0im, 0, 0.0+0im)               # (8,1): (√3/6)λ¹
-    SU3ProductEntry(0.0, 2, -_SU3_INV_4SQRT3+0im, 5, _SU3_SQRT3_4*1im)     # (8,2): (-√3/12)λ² + (i√3/4)λ⁵
-    SU3ProductEntry(0.0, 3, -_SU3_INV_4SQRT3+0im, 6, _SU3_SQRT3_4*1im)     # (8,3): (-√3/12)λ³ + (i√3/4)λ⁶
-    SU3ProductEntry(0.0, 4, _SU3_INV_2SQRT3+0im, 0, 0.0+0im)               # (8,4): (√3/6)λ⁴
-    SU3ProductEntry(0.0, 2, -_SU3_SQRT3_4*1im, 5, -_SU3_INV_4SQRT3+0im)    # (8,5): (-i√3/4)λ² + (-√3/12)λ⁵
-    SU3ProductEntry(0.0, 3, -_SU3_SQRT3_4*1im, 6, -_SU3_INV_4SQRT3+0im)    # (8,6): (-i√3/4)λ³ + (-√3/12)λ⁶
-    SU3ProductEntry(0.0, 7, _SU3_INV_2SQRT3+0im, 0, 0.0+0im)               # (8,7): (√3/6)λ⁷
-    SU3ProductEntry(_SU3_ID_COEFF, 8, -_SU3_INV_2SQRT3+0im, 0, 0.0+0im)    # (8,8): 1/6 I + (-√3/6)λ⁸
-]
-
-"""
-    su3_product_lookup(a::Int, b::Int) -> SU3ProductEntry
-
-Fast O(1) lookup for SU(3) product λ^a λ^b (Float64 mode only).
-Returns precomputed entry with identity coefficient and up to 2 generator terms.
-
-Note: The lookup table is stored in column-major order (Julia default), 
-so we access [b, a] to get the entry for λ^a × λ^b.
-
-This is used internally when `using_float_coefficients() == true`.
-"""
-@inline function su3_product_lookup(a::Int, b::Int)
-    @inbounds SU3_PRODUCTS[b, a]
-end
-
-# ============================================================================
-# SU(3) Symbolic Coefficient Computation
-# ============================================================================
-#
-# When not in float mode, we compute SU(3) product coefficients symbolically
-# to preserve exact values like √3/6.
-#
-# The SU(3) product lookup table stores indices and coefficient "codes":
-# - For each entry (a,b), we store (id_flag, c1, code1, c2, code2)
-# - Coefficient codes identify which symbolic coefficient to use
-
-# Coefficient codes for SU(3) products
-# These encode the structure: sign * (rational_part + i * imag_rational_part) * sqrt3_power
-# Format: (real_num, real_denom, imag_num, imag_denom, sqrt3_in_num::Bool)
-# Example: √3/6 = (1, 6, 0, 1, true), i/4 = (0, 1, 1, 4, false)
-
-# We encode the 64 SU(3) products in a compact form: (has_id, c1, type1, c2, type2)
-# where type encodes the coefficient pattern
-
-# Coefficient types appearing in SU(3) products:
-const _SU3_COEFF_ZERO = 0
-const _SU3_COEFF_HALF = 1           # 1/2
-const _SU3_COEFF_QUARTER = 2        # 1/4
-const _SU3_COEFF_NEG_QUARTER = 3    # -1/4
-const _SU3_COEFF_I_HALF = 4         # i/2
-const _SU3_COEFF_NEG_I_HALF = 5     # -i/2
-const _SU3_COEFF_I_QUARTER = 6      # i/4
-const _SU3_COEFF_NEG_I_QUARTER = 7  # -i/4
-const _SU3_COEFF_SQRT3_6 = 8        # √3/6
-const _SU3_COEFF_NEG_SQRT3_6 = 9    # -√3/6
-const _SU3_COEFF_SQRT3_12 = 10      # √3/12
-const _SU3_COEFF_NEG_SQRT3_12 = 11  # -√3/12
-const _SU3_COEFF_SQRT3_4 = 12       # √3/4
-const _SU3_COEFF_NEG_SQRT3_4 = 13   # -√3/4
-const _SU3_COEFF_I_SQRT3_4 = 14     # i√3/4
-const _SU3_COEFF_NEG_I_SQRT3_4 = 15 # -i√3/4
-
-"""
-    _su3_decode_coeff(code::Int)
-
-Decode a coefficient code into the actual numeric value.
-In float mode, returns Float64/ComplexF64.
-In symbolic mode, returns Rational or symbolic expressions.
-"""
-function _su3_decode_coeff(code::Int)
-    if using_float_coefficients()
-        return _su3_decode_coeff_float(code)
-    else
-        return _su3_decode_coeff_symbolic(code)
-    end
-end
-
-# Float64 decoding (high-speed mode)
-@inline function _su3_decode_coeff_float(code::Int)
-    code == _SU3_COEFF_ZERO && return 0.0 + 0.0im
-    code == _SU3_COEFF_HALF && return 0.5 + 0.0im
-    code == _SU3_COEFF_QUARTER && return 0.25 + 0.0im
-    code == _SU3_COEFF_NEG_QUARTER && return -0.25 + 0.0im
-    code == _SU3_COEFF_I_HALF && return 0.0 + 0.5im
-    code == _SU3_COEFF_NEG_I_HALF && return 0.0 - 0.5im
-    code == _SU3_COEFF_I_QUARTER && return 0.0 + 0.25im
-    code == _SU3_COEFF_NEG_I_QUARTER && return 0.0 - 0.25im
-    code == _SU3_COEFF_SQRT3_6 && return _SU3_INV_2SQRT3 + 0.0im
-    code == _SU3_COEFF_NEG_SQRT3_6 && return -_SU3_INV_2SQRT3 + 0.0im
-    code == _SU3_COEFF_SQRT3_12 && return _SU3_INV_4SQRT3 + 0.0im
-    code == _SU3_COEFF_NEG_SQRT3_12 && return -_SU3_INV_4SQRT3 + 0.0im
-    code == _SU3_COEFF_SQRT3_4 && return _SU3_SQRT3_4 + 0.0im
-    code == _SU3_COEFF_NEG_SQRT3_4 && return -_SU3_SQRT3_4 + 0.0im
-    code == _SU3_COEFF_I_SQRT3_4 && return 0.0 + _SU3_SQRT3_4*im
-    code == _SU3_COEFF_NEG_I_SQRT3_4 && return 0.0 - _SU3_SQRT3_4*im
-    error("Unknown SU(3) coefficient code: $code")
-end
-
-# Symbolic decoding (exact mode) - uses coefficient provider functions
-function _su3_decode_coeff_symbolic(code::Int)
-    code == _SU3_COEFF_ZERO && return 0
-    code == _SU3_COEFF_HALF && return 1//2
-    code == _SU3_COEFF_QUARTER && return 1//4
-    code == _SU3_COEFF_NEG_QUARTER && return -1//4
-    code == _SU3_COEFF_I_HALF && return (1//2)*im
-    code == _SU3_COEFF_NEG_I_HALF && return (-1//2)*im
-    code == _SU3_COEFF_I_QUARTER && return (1//4)*im
-    code == _SU3_COEFF_NEG_I_QUARTER && return (-1//4)*im
-    code == _SU3_COEFF_SQRT3_6 && return su3_sqrt3_over_6()
-    code == _SU3_COEFF_NEG_SQRT3_6 && return -su3_sqrt3_over_6()
-    code == _SU3_COEFF_SQRT3_12 && return su3_sqrt3_over_12()
-    code == _SU3_COEFF_NEG_SQRT3_12 && return -su3_sqrt3_over_12()
-    code == _SU3_COEFF_SQRT3_4 && return su3_sqrt3_over_4()
-    code == _SU3_COEFF_NEG_SQRT3_4 && return -su3_sqrt3_over_4()
-    code == _SU3_COEFF_I_SQRT3_4 && return su3_sqrt3_over_4() * im
-    code == _SU3_COEFF_NEG_I_SQRT3_4 && return -su3_sqrt3_over_4() * im
-    error("Unknown SU(3) coefficient code: $code")
-end
-
-# Compact encoding: (has_id::Bool, c1::Int8, code1::Int8, c2::Int8, code2::Int8)
-# We store as Int32 for compactness: has_id in bit 0, c1 in bits 1-4, code1 in bits 5-8, etc.
-# Or just use a tuple - simpler and fast enough
-
-const SU3_PRODUCTS_CODED = (
-    # Row 1: λ¹ × λʲ (a=1)
-    (true, 8, _SU3_COEFF_SQRT3_6, 0, _SU3_COEFF_ZERO),          # (1,1): 1/6 I + (√3/6)λ⁸
-    (false, 3, _SU3_COEFF_QUARTER, 6, _SU3_COEFF_I_QUARTER),    # (1,2): (1/4)λ³ + (i/4)λ⁶
-    (false, 2, _SU3_COEFF_QUARTER, 5, _SU3_COEFF_I_QUARTER),    # (1,3): (1/4)λ² + (i/4)λ⁵
-    (false, 7, _SU3_COEFF_I_HALF, 0, _SU3_COEFF_ZERO),          # (1,4): (i/2)λ⁷
-    (false, 3, _SU3_COEFF_NEG_I_QUARTER, 6, _SU3_COEFF_QUARTER),# (1,5): (-i/4)λ³ + (1/4)λ⁶
-    (false, 2, _SU3_COEFF_NEG_I_QUARTER, 5, _SU3_COEFF_QUARTER),# (1,6): (-i/4)λ² + (1/4)λ⁵
-    (false, 4, _SU3_COEFF_NEG_I_HALF, 0, _SU3_COEFF_ZERO),      # (1,7): (-i/2)λ⁴
-    (false, 1, _SU3_COEFF_SQRT3_6, 0, _SU3_COEFF_ZERO),         # (1,8): (√3/6)λ¹
-    # Row 2: λ² × λʲ (a=2)
-    (false, 3, _SU3_COEFF_QUARTER, 6, _SU3_COEFF_NEG_I_QUARTER),# (2,1): (1/4)λ³ + (-i/4)λ⁶
-    (true, 7, _SU3_COEFF_QUARTER, 8, _SU3_COEFF_NEG_SQRT3_12),  # (2,2): 1/6 I + (1/4)λ⁷ + (-√3/12)λ⁸
-    (false, 1, _SU3_COEFF_QUARTER, 4, _SU3_COEFF_I_QUARTER),    # (2,3): (1/4)λ¹ + (i/4)λ⁴
-    (false, 3, _SU3_COEFF_NEG_I_QUARTER, 6, _SU3_COEFF_NEG_QUARTER),# (2,4): (-i/4)λ³ + (-1/4)λ⁶
-    (false, 7, _SU3_COEFF_I_QUARTER, 8, _SU3_COEFF_I_SQRT3_4),  # (2,5): (i/4)λ⁷ + (i√3/4)λ⁸
-    (false, 1, _SU3_COEFF_I_QUARTER, 4, _SU3_COEFF_NEG_QUARTER),# (2,6): (i/4)λ¹ + (-1/4)λ⁴
-    (false, 2, _SU3_COEFF_QUARTER, 5, _SU3_COEFF_NEG_I_QUARTER),# (2,7): (1/4)λ² + (-i/4)λ⁵
-    (false, 2, _SU3_COEFF_NEG_SQRT3_12, 5, _SU3_COEFF_NEG_I_SQRT3_4),# (2,8): (-√3/12)λ² + (-i√3/4)λ⁵
-    # Row 3: λ³ × λʲ (a=3)
-    (false, 2, _SU3_COEFF_QUARTER, 5, _SU3_COEFF_NEG_I_QUARTER),# (3,1): (1/4)λ² + (-i/4)λ⁵
-    (false, 1, _SU3_COEFF_QUARTER, 4, _SU3_COEFF_NEG_I_QUARTER),# (3,2): (1/4)λ¹ + (-i/4)λ⁴
-    (true, 7, _SU3_COEFF_NEG_QUARTER, 8, _SU3_COEFF_NEG_SQRT3_12),# (3,3): 1/6 I + (-1/4)λ⁷ + (-√3/12)λ⁸
-    (false, 2, _SU3_COEFF_I_QUARTER, 5, _SU3_COEFF_QUARTER),    # (3,4): (i/4)λ² + (1/4)λ⁵
-    (false, 1, _SU3_COEFF_I_QUARTER, 4, _SU3_COEFF_QUARTER),    # (3,5): (i/4)λ¹ + (1/4)λ⁴
-    (false, 7, _SU3_COEFF_NEG_I_QUARTER, 8, _SU3_COEFF_I_SQRT3_4),# (3,6): (-i/4)λ⁷ + (i√3/4)λ⁸
-    (false, 3, _SU3_COEFF_NEG_QUARTER, 6, _SU3_COEFF_I_QUARTER),# (3,7): (-1/4)λ³ + (i/4)λ⁶
-    (false, 3, _SU3_COEFF_NEG_SQRT3_12, 6, _SU3_COEFF_NEG_I_SQRT3_4),# (3,8): (-√3/12)λ³ + (-i√3/4)λ⁶
-    # Row 4: λ⁴ × λʲ (a=4)
-    (false, 7, _SU3_COEFF_NEG_I_HALF, 0, _SU3_COEFF_ZERO),      # (4,1): (-i/2)λ⁷
-    (false, 3, _SU3_COEFF_I_QUARTER, 6, _SU3_COEFF_NEG_QUARTER),# (4,2): (i/4)λ³ + (-1/4)λ⁶
-    (false, 2, _SU3_COEFF_NEG_I_QUARTER, 5, _SU3_COEFF_QUARTER),# (4,3): (-i/4)λ² + (1/4)λ⁵
-    (true, 8, _SU3_COEFF_SQRT3_6, 0, _SU3_COEFF_ZERO),          # (4,4): 1/6 I + (√3/6)λ⁸
-    (false, 3, _SU3_COEFF_QUARTER, 6, _SU3_COEFF_I_QUARTER),    # (4,5): (1/4)λ³ + (i/4)λ⁶
-    (false, 2, _SU3_COEFF_NEG_QUARTER, 5, _SU3_COEFF_NEG_I_QUARTER),# (4,6): (-1/4)λ² + (-i/4)λ⁵
-    (false, 1, _SU3_COEFF_I_HALF, 0, _SU3_COEFF_ZERO),          # (4,7): (i/2)λ¹
-    (false, 4, _SU3_COEFF_SQRT3_6, 0, _SU3_COEFF_ZERO),         # (4,8): (√3/6)λ⁴
-    # Row 5: λ⁵ × λʲ (a=5)
-    (false, 3, _SU3_COEFF_I_QUARTER, 6, _SU3_COEFF_QUARTER),    # (5,1): (i/4)λ³ + (1/4)λ⁶
-    (false, 7, _SU3_COEFF_NEG_I_QUARTER, 8, _SU3_COEFF_NEG_I_SQRT3_4),# (5,2): (-i/4)λ⁷ + (-i√3/4)λ⁸
-    (false, 1, _SU3_COEFF_NEG_I_QUARTER, 4, _SU3_COEFF_QUARTER),# (5,3): (-i/4)λ¹ + (1/4)λ⁴
-    (false, 3, _SU3_COEFF_QUARTER, 6, _SU3_COEFF_NEG_I_QUARTER),# (5,4): (1/4)λ³ + (-i/4)λ⁶
-    (true, 7, _SU3_COEFF_QUARTER, 8, _SU3_COEFF_NEG_SQRT3_12),  # (5,5): 1/6 I + (1/4)λ⁷ + (-√3/12)λ⁸
-    (false, 1, _SU3_COEFF_QUARTER, 4, _SU3_COEFF_I_QUARTER),    # (5,6): (1/4)λ¹ + (i/4)λ⁴
-    (false, 2, _SU3_COEFF_I_QUARTER, 5, _SU3_COEFF_QUARTER),    # (5,7): (i/4)λ² + (1/4)λ⁵
-    (false, 2, _SU3_COEFF_I_SQRT3_4, 5, _SU3_COEFF_NEG_SQRT3_12),# (5,8): (i√3/4)λ² + (-√3/12)λ⁵
-    # Row 6: λ⁶ × λʲ (a=6)
-    (false, 2, _SU3_COEFF_I_QUARTER, 5, _SU3_COEFF_QUARTER),    # (6,1): (i/4)λ² + (1/4)λ⁵
-    (false, 1, _SU3_COEFF_NEG_I_QUARTER, 4, _SU3_COEFF_NEG_QUARTER),# (6,2): (-i/4)λ¹ + (-1/4)λ⁴
-    (false, 7, _SU3_COEFF_I_QUARTER, 8, _SU3_COEFF_NEG_I_SQRT3_4),# (6,3): (i/4)λ⁷ + (-i√3/4)λ⁸
-    (false, 2, _SU3_COEFF_NEG_QUARTER, 5, _SU3_COEFF_I_QUARTER),# (6,4): (-1/4)λ² + (i/4)λ⁵
-    (false, 1, _SU3_COEFF_QUARTER, 4, _SU3_COEFF_NEG_I_QUARTER),# (6,5): (1/4)λ¹ + (-i/4)λ⁴
-    (true, 7, _SU3_COEFF_NEG_QUARTER, 8, _SU3_COEFF_NEG_SQRT3_12),# (6,6): 1/6 I + (-1/4)λ⁷ + (-√3/12)λ⁸
-    (false, 3, _SU3_COEFF_NEG_I_QUARTER, 6, _SU3_COEFF_NEG_QUARTER),# (6,7): (-i/4)λ³ + (-1/4)λ⁶
-    (false, 3, _SU3_COEFF_I_SQRT3_4, 6, _SU3_COEFF_NEG_SQRT3_12),# (6,8): (i√3/4)λ³ + (-√3/12)λ⁶
-    # Row 7: λ⁷ × λʲ (a=7)
-    (false, 4, _SU3_COEFF_I_HALF, 0, _SU3_COEFF_ZERO),          # (7,1): (i/2)λ⁴
-    (false, 2, _SU3_COEFF_QUARTER, 5, _SU3_COEFF_I_QUARTER),    # (7,2): (1/4)λ² + (i/4)λ⁵
-    (false, 3, _SU3_COEFF_NEG_QUARTER, 6, _SU3_COEFF_NEG_I_QUARTER),# (7,3): (-1/4)λ³ + (-i/4)λ⁶
-    (false, 1, _SU3_COEFF_NEG_I_HALF, 0, _SU3_COEFF_ZERO),      # (7,4): (-i/2)λ¹
-    (false, 2, _SU3_COEFF_NEG_I_QUARTER, 5, _SU3_COEFF_QUARTER),# (7,5): (-i/4)λ² + (1/4)λ⁵
-    (false, 3, _SU3_COEFF_I_QUARTER, 6, _SU3_COEFF_NEG_QUARTER),# (7,6): (i/4)λ³ + (-1/4)λ⁶
-    (true, 8, _SU3_COEFF_SQRT3_6, 0, _SU3_COEFF_ZERO),          # (7,7): 1/6 I + (√3/6)λ⁸
-    (false, 7, _SU3_COEFF_SQRT3_6, 0, _SU3_COEFF_ZERO),         # (7,8): (√3/6)λ⁷
-    # Row 8: λ⁸ × λʲ (a=8)
-    (false, 1, _SU3_COEFF_SQRT3_6, 0, _SU3_COEFF_ZERO),         # (8,1): (√3/6)λ¹
-    (false, 2, _SU3_COEFF_NEG_SQRT3_12, 5, _SU3_COEFF_I_SQRT3_4),# (8,2): (-√3/12)λ² + (i√3/4)λ⁵
-    (false, 3, _SU3_COEFF_NEG_SQRT3_12, 6, _SU3_COEFF_I_SQRT3_4),# (8,3): (-√3/12)λ³ + (i√3/4)λ⁶
-    (false, 4, _SU3_COEFF_SQRT3_6, 0, _SU3_COEFF_ZERO),         # (8,4): (√3/6)λ⁴
-    (false, 2, _SU3_COEFF_NEG_I_SQRT3_4, 5, _SU3_COEFF_NEG_SQRT3_12),# (8,5): (-i√3/4)λ² + (-√3/12)λ⁵
-    (false, 3, _SU3_COEFF_NEG_I_SQRT3_4, 6, _SU3_COEFF_NEG_SQRT3_12),# (8,6): (-i√3/4)λ³ + (-√3/12)λ⁶
-    (false, 7, _SU3_COEFF_SQRT3_6, 0, _SU3_COEFF_ZERO),         # (8,7): (√3/6)λ⁷
-    (true, 8, _SU3_COEFF_NEG_SQRT3_6, 0, _SU3_COEFF_ZERO),      # (8,8): 1/6 I + (-√3/6)λ⁸
+# Coefficient codes: 0=zero, 1-7=±1/2,±1/4,±i/2,±i/4, 8-15=√3 variants
+# Decode via lookup - Float64 values for codes 0-15
+const _SU3_COEFF_FLOAT = (
+    0.0+0.0im, 0.5+0.0im, 0.25+0.0im, -0.25+0.0im,        # 0:zero 1:1/2 2:1/4 3:-1/4
+    0.0+0.5im, 0.0-0.5im, 0.0+0.25im, 0.0-0.25im,         # 4:i/2 5:-i/2 6:i/4 7:-i/4
+    0.28867513459481287+0.0im, -0.28867513459481287+0.0im,  # 8:√3/6 9:-√3/6
+    0.14433756729740643+0.0im, -0.14433756729740643+0.0im,  # 10:√3/12 11:-√3/12
+    0.4330127018922193+0.0im, -0.4330127018922193+0.0im,    # 12:√3/4 13:-√3/4
+    0.0+0.4330127018922193im, 0.0-0.4330127018922193im      # 14:i√3/4 15:-i√3/4
 )
+
+# Decode coefficient code to value (symbolic or float)
+function _su3_decode_coeff(code::Int)
+    using_float_coefficients() && return @inbounds _SU3_COEFF_FLOAT[code+1]
+    # Symbolic mode
+    code == 0 && return 0
+    code == 1 && return 1//2
+    code == 2 && return 1//4
+    code == 3 && return -1//4
+    code == 4 && return (1//2)*im
+    code == 5 && return (-1//2)*im
+    code == 6 && return (1//4)*im
+    code == 7 && return (-1//4)*im
+    # √3 terms
+    s3 = _sqrt3()
+    code == 8 && return s3/6
+    code == 9 && return -s3/6
+    code == 10 && return s3/12
+    code == 11 && return -s3/12
+    code == 12 && return s3/4
+    code == 13 && return -s3/4
+    code == 14 && return s3/4 * im
+    code == 15 && return -s3/4 * im
+    error("Unknown SU(3) coefficient code: $code")
+end
+
+# SU(3) products encoded as (has_id, c1, code1, c2, code2)
+# Codes: 0=0, 1=1/2, 2=1/4, 3=-1/4, 4=i/2, 5=-i/2, 6=i/4, 7=-i/4
+#        8=√3/6, 9=-√3/6, 10=√3/12, 11=-√3/12, 12=√3/4, 13=-√3/4, 14=i√3/4, 15=-i√3/4
+const SU3_PRODUCTS_CODED = (
+    (true,8,8,0,0),(false,3,2,6,6),(false,2,2,5,6),(false,7,4,0,0),(false,3,7,6,2),(false,2,7,5,2),(false,4,5,0,0),(false,1,8,0,0),  # a=1
+    (false,3,2,6,7),(true,7,2,8,11),(false,1,2,4,6),(false,3,7,6,3),(false,7,6,8,14),(false,1,6,4,3),(false,2,2,5,7),(false,2,11,5,15),  # a=2
+    (false,2,2,5,7),(false,1,2,4,7),(true,7,3,8,11),(false,2,6,5,2),(false,1,6,4,2),(false,7,7,8,14),(false,3,3,6,6),(false,3,11,6,15),  # a=3
+    (false,7,5,0,0),(false,3,6,6,3),(false,2,7,5,2),(true,8,8,0,0),(false,3,2,6,6),(false,2,3,5,7),(false,1,4,0,0),(false,4,8,0,0),  # a=4
+    (false,3,6,6,2),(false,7,7,8,15),(false,1,7,4,2),(false,3,2,6,7),(true,7,2,8,11),(false,1,2,4,6),(false,2,6,5,2),(false,2,14,5,11),  # a=5
+    (false,2,6,5,2),(false,1,7,4,3),(false,7,6,8,15),(false,2,3,5,6),(false,1,2,4,7),(true,7,3,8,11),(false,3,7,6,3),(false,3,14,6,11),  # a=6
+    (false,4,4,0,0),(false,2,2,5,6),(false,3,3,6,7),(false,1,5,0,0),(false,2,7,5,2),(false,3,6,6,3),(true,8,8,0,0),(false,7,8,0,0),  # a=7
+    (false,1,8,0,0),(false,2,11,5,14),(false,3,11,6,14),(false,4,8,0,0),(false,2,15,5,11),(false,3,15,6,11),(false,7,8,0,0),(true,8,9,0,0)  # a=8
+)
+
+# SU(3) identity coefficient
+su3_id_coeff() = using_float_coefficients() ? 1/6 : 1//6
 
 """
     su3_product_coeffs(a::Int, b::Int)
