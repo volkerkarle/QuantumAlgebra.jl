@@ -580,7 +580,10 @@ const ComplexInt = Complex{Int}
 # Legacy contraction result type for backwards compatibility
 const LegacyContractionResult = Tuple{Bool,ComplexInt,Union{BaseOperator,Nothing}}
 
-function _contract(A::BaseOperator,B::BaseOperator)::Union{LegacyContractionResult, Tuple{Bool, ContractionResult}}
+# SU(2) inline contraction result: (true, :su2_inline, id_coeff, gen_term_or_nothing)
+const SU2InlineContractionResult = Tuple{Bool, Symbol, Float64, Any}
+
+function _contract(A::BaseOperator,B::BaseOperator)::Union{LegacyContractionResult, Tuple{Bool, ContractionResult}, SU2InlineContractionResult}
     if A.t in (TLSCreate_,TLSDestroy_,FermionDestroy_,FermionCreate_) && A == B
         return (true,zero(ComplexInt),nothing)
     elseif A.t in (TLSx_,TLSy_,TLSz_) && B.t in (TLSx_,TLSy_,TLSz_) && A.name == B.name && A.inds == B.inds
@@ -611,7 +614,7 @@ where:
 Returns (do_contract::Bool, ContractionResult) or legacy tuple.
 
 Optimized with fast path for SU(2) using direct computation.
-For SU(2), returns legacy tuple format when possible for inline processing.
+For SU(2), uses specialized SU2ContractionResult for inline processing.
 """
 function _contract_lie_algebra_generators(A::BaseOperator, B::BaseOperator)
     # Different algebras or different names don't contract
@@ -627,39 +630,29 @@ function _contract_lie_algebra_generators(A::BaseOperator, B::BaseOperator)
     a, b = Int(A.gen_idx), Int(B.gen_idx)
     
     # =========================================================================
-    # FAST PATH: SU(2) - use legacy tuple format for inline processing
+    # FAST PATH: SU(2) - use inline tuple for direct processing in normal_order!
     # =========================================================================
     # For SU(2): T^a T^b = (1/4)δ_{ab}I + (i/2)ε_{abc}T^c
     # 
-    # The TLS convention is: σa σb = δab + i ϵabc σc (with σ^2 = 1)
-    # Our convention is: T^a T^b = (1/4)δ_{ab}I + (i/2)ε_{abc}T^c (with T = σ/2)
+    # We return a specialized tuple that normal_order! can process inline:
+    # (true, :su2_inline, id_coeff, gen_coeff, c_or_nothing)
     #
-    # Unfortunately, the legacy format assumes a multiplicative identity (prefactor),
-    # but our result has an additive identity term. We can only use legacy format
-    # for the off-diagonal case where there's no identity contribution.
-    #
-    # For the diagonal case (a == b), we must use ContractionResult since we need
-    # to return (1/4)I which is not representable as a simple prefactor times the
-    # remaining expression.
+    # Diagonal case (a == b): T^a T^a = (1/4)I
+    # Off-diagonal case: T^a T^b = (i/2)ε_{abc}T^c
     
     if A.algebra_id == SU2_ALGEBRA_ID
         if a == b
-            # Diagonal case: T^a T^a = (1/4)I
-            # Must use ContractionResult for the identity coefficient
-            result = ContractionResult(0.25, Tuple{ComplexF64, BaseOperator}[])
-            return (true, result)
+            # Diagonal case: T^a T^a = (1/4)I - only identity, no generator
+            # Return (true, :su2_inline, id_coeff::Float64, nothing)
+            return (true, :su2_inline, 0.25, nothing)
         else
-            # Off-diagonal case: T^a T^b = (i/2)ε_{abc}T^c (no identity term!)
-            # Can use legacy format for faster inline processing
+            # Off-diagonal case: T^a T^b = (i/2)ε_{abc}T^c (no identity term)
             c = 6 - a - b
             s = (a % 3 + 1 == b) ? 1 : -1
-            # Coefficient is (i/2)ε_{abc}
-            coeff = ComplexInt(0, s)  # Will be divided by 2 below... wait, we need 0.5i
-            # Actually ComplexInt is Complex{Int}, so we can't represent 0.5i
-            # We have to use ContractionResult after all
+            gen_coeff = ComplexF64(0.5im * s)
             new_op = LieAlgebraGenerator(A.name, A.algebra_id, c, A.inds)
-            result = ContractionResult(0.0, [(ComplexF64(0.5im * s), new_op)])
-            return (true, result)
+            # Return (true, :su2_inline, id_coeff::Float64, (gen_coeff, op))
+            return (true, :su2_inline, 0.0, (gen_coeff, new_op))
         end
     end
     
@@ -707,7 +700,8 @@ function normal_order!(ops::BaseOpProduct,term_collector,shortcut_vacA_zero=fals
     # do an insertion sort to get to normal ordering
     # reference: https://en.wikipedia.org/wiki/Insertion_sort
     A = ops.v
-    prefactor::ComplexInt = one(ComplexInt)
+    # Use ComplexF64 for prefactor to support fractional coefficients from SU(N)
+    prefactor::ComplexF64 = one(ComplexF64)
     for i = 2:length(A)
         j = i
         while j>1 && A[j]<A[j-1]
@@ -770,8 +764,32 @@ function normal_order!(ops::BaseOpProduct,term_collector,shortcut_vacA_zero=fals
         dosimplify = contract_result[1]
         if dosimplify
             did_contractions = true
-            if contract_result isa Tuple{Bool, ContractionResult}
-                # Lie algebra generator contraction (multi-term result)
+            if contract_result isa Tuple{Bool, Symbol, Float64, Any} && contract_result[2] === :su2_inline
+                # =========================================================
+                # FAST PATH: SU(2) inline contraction (like TLS)
+                # Format: (true, :su2_inline, id_coeff, gen_term_or_nothing)
+                # =========================================================
+                id_coeff = contract_result[3]
+                gen_term = contract_result[4]
+                
+                if gen_term === nothing
+                    # Diagonal case: T^a T^a = 0.25*I
+                    # Multiply prefactor by 0.25 and remove the pair
+                    prefactor *= id_coeff
+                    deleteat!(A, (k, k+1))
+                    # op is nothing - this is like the TLS identity case
+                else
+                    # Off-diagonal case: T^a T^b = gen_coeff * T^c
+                    # Multiply prefactor by gen_coeff and replace pair with T^c
+                    gen_coeff, new_op = gen_term
+                    prefactor *= gen_coeff
+                    A[k] = new_op
+                    deleteat!(A, k+1)
+                end
+                iszero(prefactor) && return prefactor
+                k > 1 && (k -= 1)
+            elseif contract_result isa Tuple{Bool, ContractionResult}
+                # Lie algebra generator contraction (multi-term result) - SU(N) with N > 2
                 result = contract_result[2]
                 
                 # For Lie algebra contractions, we add all terms to term_collector
