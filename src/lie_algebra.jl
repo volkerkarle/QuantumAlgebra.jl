@@ -340,6 +340,70 @@ const SU2_SIGMA_X_INDEX = 1
 const SU2_SIGMA_Y_INDEX = 2
 const SU2_SIGMA_Z_INDEX = 3
 
+# The algebra ID for SU(2), which is always registered first
+const SU2_ALGEBRA_ID = UInt16(1)
+
+# ============================================================================
+# SU(2) Fast Path: Pre-computed Levi-Civita structure constants
+# ============================================================================
+# 
+# For SU(2), [T^a, T^b] = i ε^{abc} T^c (with our normalization T = σ/2)
+# The structure constants are f^{abc} = ε^{abc} (Levi-Civita symbol)
+#
+# su2_levicivita[a, b] = (c, ε_{abc}) where c = 6 - a - b for the non-zero case
+# This matches the TLS implementation's levicivita_lut
+
+"""
+    su2_commutator_result(a::Int, b::Int)
+
+Fast path for SU(2) commutator structure constants.
+Returns (c, f_abc) where [T^a, T^b] = i f^{abc} T^c.
+For a == b, returns (0, 0) indicating zero commutator.
+
+Uses the same Levi-Civita lookup as the TLS implementation.
+"""
+@inline function su2_commutator_result(a::Int, b::Int)
+    # Levi-Civita: ε_{123} = ε_{231} = ε_{312} = 1
+    #              ε_{321} = ε_{213} = ε_{132} = -1
+    #              ε_{aab} = 0 for any repeated index
+    a == b && return (0, 0)
+    c = 6 - a - b  # The third index (since 1+2+3=6)
+    # Sign from Levi-Civita symbol: cyclic permutations of (1,2,3) are +1
+    # (1,2)->3: +1, (2,3)->1: +1, (3,1)->2: +1
+    # (2,1)->3: -1, (3,2)->1: -1, (1,3)->2: -1
+    # Cyclic: (a,b,c) where b = a%3 + 1 gives +1
+    s = (a % 3 + 1 == b) ? 1 : -1
+    return (c, s)
+end
+
+"""
+    su2_product_result(a::Int, b::Int)
+
+Fast path for SU(2) product rule: T^a T^b = (1/4)δ_{ab} + (i/2)ε_{abc}T^c
+Returns (id_coeff, c, gen_coeff) where:
+- id_coeff is the coefficient of identity
+- c is the generator index (0 if none)
+- gen_coeff is the coefficient of T^c
+
+For SU(2) with normalization Tr(T^a T^b) = δ_{ab}/2:
+T^a T^b = (1/4)δ_{ab}I + (1/2)(d_{abc} + i f_{abc})T^c
+
+For SU(2), d_{abc} = 0 (no symmetric structure constants), so:
+T^a T^b = (1/4)δ_{ab}I + (i/2)f_{abc}T^c
+"""
+@inline function su2_product_result(a::Int, b::Int)
+    if a == b
+        # T^a T^a = (1/4)I (diagonal case)
+        return (0.25, 0, 0.0im)
+    else
+        c = 6 - a - b
+        # f_{abc} = ε_{abc}: cyclic permutations give +1
+        s = (a % 3 + 1 == b) ? 1 : -1
+        # T^a T^b = (i/2)ε_{abc}T^c
+        return (0.0, c, 0.5im * s)
+    end
+end
+
 """
     pauli_to_gen_index(pauli::Symbol)
 

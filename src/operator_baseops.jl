@@ -489,6 +489,8 @@ For generators from the same algebra with the same indices:
 
 Returns (exchange_prefactor, ExchangeResult) following the convention:
 B A = exchange_prefactor * A B + terms_from_ExchangeResult
+
+Optimized with fast path for SU(2) using direct Levi-Civita computation.
 """
 function _exchange_lie_algebra_generators(A::BaseOperator, B::BaseOperator)
     # Different algebras or different names commute
@@ -507,75 +509,56 @@ function _exchange_lie_algebra_generators(A::BaseOperator, B::BaseOperator)
         return (1, nothing)
     end
     
-    # Get the algebra and compute commutator [B, A] = -[A, B]
-    # We want B A = A B + [B, A] = A B - i f^{AB,c} T^c
-    # where f^{AB,c} are structure constants for [A, B]
+    a, b = Int(A.gen_idx), Int(B.gen_idx)
+    
+    # =========================================================================
+    # FAST PATH: SU(2) - use direct Levi-Civita computation (like TLS)
+    # =========================================================================
+    if A.algebra_id == SU2_ALGEBRA_ID
+        # [T^a, T^b] = i ε_{abc} T^c
+        # We want B A = A B + [B, A] = A B - [A, B] = A B - i ε_{abc} T^c
+        c, eps_abc = su2_commutator_result(a, b)
+        if c == 0
+            return (1, nothing)
+        end
+        # Coefficient is -i * ε_{abc} (note: structure constant f_{abc} = ε_{abc} for SU(2))
+        coeff = Complex{Rational{Int}}(0, -eps_abc)
+        new_op = LieAlgebraGenerator(A.name, A.algebra_id, c, A.inds)
+        return (1, ExchangeResult(coeff, dd, new_op))
+    end
+    
+    # =========================================================================
+    # GENERAL PATH: Use structure constant lookup
+    # =========================================================================
     alg = get_algebra(A.algebra_id)
-    
-    # Get structure constants for [T^a, T^b] where a = A.gen_idx, b = B.gen_idx
-    # [T^a, T^b] = i f^{abc} T^c
-    # So [T^b, T^a] = -i f^{abc} T^c = i f^{bac} T^c
-    # We want B A = A B + [B, A], and [B, A] = i f^{ba,c} T^c = -i f^{ab,c} T^c
-    
-    f_ab = structure_constants(alg, Int(A.gen_idx), Int(B.gen_idx))
+    f_ab = structure_constants(alg, a, b)
     
     if isempty(f_ab)
-        # Commutator is zero
         return (1, nothing)
     end
     
-    if isempty(dd)
-        # Indices are all the same: T^b T^a = T^a T^b + [T^b, T^a]
-        # Actually for normal ordering we need: B A = ? A B + extra
-        # If A < B in ordering, and we're computing B A:
-        # B A = A B + [B, A] = A B - [A, B] = A B - i f^{abc} T^c
-        
-        if length(f_ab) == 1
-            # Single term result (e.g., SU(2))
-            c, f_abc = first(f_ab)
-            # [B, A] = -i f^{abc} T^c
-            coeff = -im * f_abc
-            new_op = LieAlgebraGenerator(A.name, A.algebra_id, c, A.inds)
-            # Convert to Complex{Rational{Int}} if possible
-            r_coeff = _try_rationalize_complex(coeff)
-            if r_coeff !== nothing
-                return (1, ExchangeResult(r_coeff, dd, new_op))
-            else
-                return (1, ExchangeResult(0//1, dd, [(coeff, new_op)]))
-            end
+    # Build result from structure constants
+    # [B, A] = -[A, B] = -i f^{abc} T^c
+    if length(f_ab) == 1
+        # Single term result
+        c, f_abc = first(f_ab)
+        coeff = -im * f_abc
+        new_op = LieAlgebraGenerator(A.name, A.algebra_id, c, A.inds)
+        r_coeff = _try_rationalize_complex(coeff)
+        if r_coeff !== nothing
+            return (1, ExchangeResult(r_coeff, dd, new_op))
         else
-            # Multi-term result (e.g., SU(3))
-            ops = Tuple{ComplexF64, BaseOperator}[]
-            for (c, f_abc) in f_ab
-                coeff = -im * f_abc
-                new_op = LieAlgebraGenerator(A.name, A.algebra_id, c, A.inds)
-                push!(ops, (coeff, new_op))
-            end
-            return (1, ExchangeResult(0//1, dd, ops))
+            return (1, ExchangeResult(0//1, dd, [(coeff, new_op)]))
         end
     else
-        # Different indices: [T^b_j, T^a_i] = δ_{ij} * (commutator at same site)
-        # T^b_j T^a_i = T^a_i T^b_j + δ_{ij} [T^b, T^a]
-        
-        if length(f_ab) == 1
-            c, f_abc = first(f_ab)
+        # Multi-term result (e.g., SU(3) and higher)
+        ops = Tuple{ComplexF64, BaseOperator}[]
+        for (c, f_abc) in f_ab
             coeff = -im * f_abc
             new_op = LieAlgebraGenerator(A.name, A.algebra_id, c, A.inds)
-            r_coeff = _try_rationalize_complex(coeff)
-            if r_coeff !== nothing
-                return (1, ExchangeResult(r_coeff, dd, new_op))
-            else
-                return (1, ExchangeResult(0//1, dd, [(coeff, new_op)]))
-            end
-        else
-            ops = Tuple{ComplexF64, BaseOperator}[]
-            for (c, f_abc) in f_ab
-                coeff = -im * f_abc
-                new_op = LieAlgebraGenerator(A.name, A.algebra_id, c, A.inds)
-                push!(ops, (coeff, new_op))
-            end
-            return (1, ExchangeResult(0//1, dd, ops))
+            push!(ops, (coeff, new_op))
         end
+        return (1, ExchangeResult(0//1, dd, ops))
     end
 end
 
@@ -626,6 +609,9 @@ where:
 - f^{abc} are the antisymmetric structure constants
 
 Returns (do_contract::Bool, ContractionResult) or legacy tuple.
+
+Optimized with fast path for SU(2) using direct computation.
+For SU(2), returns legacy tuple format when possible for inline processing.
 """
 function _contract_lie_algebra_generators(A::BaseOperator, B::BaseOperator)
     # Different algebras or different names don't contract
@@ -638,10 +624,50 @@ function _contract_lie_algebra_generators(A::BaseOperator, B::BaseOperator)
         return (false, zero(ComplexInt), nothing)
     end
     
-    # Get the algebra
+    a, b = Int(A.gen_idx), Int(B.gen_idx)
+    
+    # =========================================================================
+    # FAST PATH: SU(2) - use legacy tuple format for inline processing
+    # =========================================================================
+    # For SU(2): T^a T^b = (1/4)δ_{ab}I + (i/2)ε_{abc}T^c
+    # 
+    # The TLS convention is: σa σb = δab + i ϵabc σc (with σ^2 = 1)
+    # Our convention is: T^a T^b = (1/4)δ_{ab}I + (i/2)ε_{abc}T^c (with T = σ/2)
+    #
+    # Unfortunately, the legacy format assumes a multiplicative identity (prefactor),
+    # but our result has an additive identity term. We can only use legacy format
+    # for the off-diagonal case where there's no identity contribution.
+    #
+    # For the diagonal case (a == b), we must use ContractionResult since we need
+    # to return (1/4)I which is not representable as a simple prefactor times the
+    # remaining expression.
+    
+    if A.algebra_id == SU2_ALGEBRA_ID
+        if a == b
+            # Diagonal case: T^a T^a = (1/4)I
+            # Must use ContractionResult for the identity coefficient
+            result = ContractionResult(0.25, Tuple{ComplexF64, BaseOperator}[])
+            return (true, result)
+        else
+            # Off-diagonal case: T^a T^b = (i/2)ε_{abc}T^c (no identity term!)
+            # Can use legacy format for faster inline processing
+            c = 6 - a - b
+            s = (a % 3 + 1 == b) ? 1 : -1
+            # Coefficient is (i/2)ε_{abc}
+            coeff = ComplexInt(0, s)  # Will be divided by 2 below... wait, we need 0.5i
+            # Actually ComplexInt is Complex{Int}, so we can't represent 0.5i
+            # We have to use ContractionResult after all
+            new_op = LieAlgebraGenerator(A.name, A.algebra_id, c, A.inds)
+            result = ContractionResult(0.0, [(ComplexF64(0.5im * s), new_op)])
+            return (true, result)
+        end
+    end
+    
+    # =========================================================================
+    # GENERAL PATH: Use structure constant lookup
+    # =========================================================================
     alg = get_algebra(A.algebra_id)
     N = algebra_dim(alg)
-    a, b = Int(A.gen_idx), Int(B.gen_idx)
     
     # Identity coefficient: (1/2N) δ_{ab}
     id_coeff = a == b ? 1.0 / (2N) : 0.0
