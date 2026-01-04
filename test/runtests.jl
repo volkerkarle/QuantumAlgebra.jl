@@ -533,6 +533,9 @@ end
     # SU(N) Lie Algebra tests are in a separate file
     include("test_lie_algebra.jl")
 
+    # Transition operator tests are in a separate file
+    include("test_transition_operators.jl")
+
     @testset "QuEqSys" begin
         H = ∑(:i,Pr"ω_i"*a'(:i)*a(:i))
         for (func,op) in ((expheis,expval), (corrheis,corr))

@@ -10,6 +10,7 @@ export @Pr_str, @Pc_str, ∑
 export param, expval, corr
 export map_scalar_function
 export LieAlgebraGenerator, is_lie_algebra_gen, su_generator, su_generators
+export TransitionOperator, is_transition_op, nlevel_ops, σ
 
 # compile-time options
 const _DEFINE_DEFAULT_OPS = @load_preference("define_default_ops", true)
@@ -183,41 +184,42 @@ const NoName = QuOpName(Symbol())
 
 # the enum also directly defines a natural ordering,so choose this directly how we later want it
 # start the counting at 1 so we can index into the tuples defined below with Int(BaseOpType)
-@enum BaseOpType        BosonCreate_=1 FermionCreate_   TLSCreate_   TLSx_  TLSy_  TLSz_  TLSDestroy_ FermionDestroy_ BosonDestroy_ LieAlgebraGen_
-const BaseOpType_adj = (BosonDestroy_, FermionDestroy_, TLSDestroy_, TLSx_, TLSy_, TLSz_, TLSCreate_, FermionCreate_, BosonCreate_, LieAlgebraGen_)
-const BaseOpType_sym  = ("†", "†", "⁺", "ˣ", "ʸ", "ᶻ", "⁻", "", "", "")
-const BaseOpType_expr = ("ᴴ", "ᴴ", "⁺", "ˣ", "ʸ", "ᶻ", "⁻", "", "", "")
-const BaseOpType_latex = ("^{\\dagger}", "^{\\dagger}", "^{+}", "^{x}", "^{y}", "^{z}", "^{-}", "", "", "")
+@enum BaseOpType        BosonCreate_=1 FermionCreate_   TLSCreate_   TLSx_  TLSy_  TLSz_  TLSDestroy_ FermionDestroy_ BosonDestroy_ LieAlgebraGen_ Transition_
+const BaseOpType_adj = (BosonDestroy_, FermionDestroy_, TLSDestroy_, TLSx_, TLSy_, TLSz_, TLSCreate_, FermionCreate_, BosonCreate_, LieAlgebraGen_, Transition_)
+const BaseOpType_sym  = ("†", "†", "⁺", "ˣ", "ʸ", "ᶻ", "⁻", "", "", "", "")
+const BaseOpType_expr = ("ᴴ", "ᴴ", "⁺", "ˣ", "ʸ", "ᶻ", "⁻", "", "", "", "")
+const BaseOpType_latex = ("^{\\dagger}", "^{\\dagger}", "^{+}", "^{x}", "^{y}", "^{z}", "^{-}", "", "", "", "")
 
-# BaseOperator struct with optional Lie algebra fields
+# BaseOperator struct with optional Lie algebra / transition operator fields
 # For non-Lie-algebra operators (bosons, fermions, TLS), algebra_id = 0 and gen_idx = 0
-# For Lie algebra generators, algebra_id is the registry ID and gen_idx is the generator index
+# For Lie algebra generators: algebra_id = registry ID, gen_idx = generator index
+# For transition operators |i⟩⟨j|: algebra_id = N (dimension), gen_idx = (i-1)*N + j
 @concrete struct BaseOperator
     t::BaseOpType
     name::QuOpName
     inds::QuIndices
     algebra_id::UInt16
     gen_idx::UInt16
-    # Constructor for non-Lie-algebra operators (backwards compatible)
+    # Constructor for basic operators (backwards compatible)
     function BaseOperator(t::BaseOpType, name, inds...)
-        t != LieAlgebraGen_ || throw(ArgumentError("Use LieAlgebraGenerator() for Lie algebra generators"))
+        t ∉ (LieAlgebraGen_, Transition_) || throw(ArgumentError("Use specialized constructor"))
         new(t, QuOpName(name), make_indices(inds...), UInt16(0), UInt16(0))
     end
-    # Full constructor for Lie algebra generators
+    # Full constructor for Lie algebra generators and transition operators
     function BaseOperator(t::BaseOpType, name, inds::QuIndices, algebra_id::UInt16, gen_idx::UInt16)
-        if t == LieAlgebraGen_
-            algebra_id != 0 || throw(ArgumentError("Lie algebra generator requires non-zero algebra_id"))
-            gen_idx != 0 || throw(ArgumentError("Lie algebra generator requires non-zero gen_idx"))
+        if t ∈ (LieAlgebraGen_, Transition_)
+            algebra_id != 0 || throw(ArgumentError("$t requires non-zero algebra_id"))
+            gen_idx != 0 || throw(ArgumentError("$t requires non-zero gen_idx"))
         else
-            algebra_id == 0 || throw(ArgumentError("Non-Lie-algebra operators must have algebra_id = 0"))
-            gen_idx == 0 || throw(ArgumentError("Non-Lie-algebra operators must have gen_idx = 0"))
+            algebra_id == 0 || throw(ArgumentError("Basic operators must have algebra_id = 0"))
+            gen_idx == 0 || throw(ArgumentError("Basic operators must have gen_idx = 0"))
         end
         new(t, QuOpName(name), inds, algebra_id, gen_idx)
     end
 end
 
-# Check if operator is a Lie algebra generator
 is_lie_algebra_gen(op::BaseOperator) = op.t == LieAlgebraGen_
+is_transition_op(op::BaseOperator) = op.t == Transition_
 
 """
     LieAlgebraGenerator(name, algebra_id, gen_idx, inds...)
@@ -237,6 +239,51 @@ LieAlgebraGenerator(name, algebra_id::Integer, gen_idx::Integer, inds...) =
     LieAlgebraGenerator(name, UInt16(algebra_id), gen_idx, inds...)
 
 # Note: su_generator and su_generators are defined in lie_algebra.jl after the algebra registry is available
+
+# ============================================================================
+# Transition Operators for N-level systems: |i⟩⟨j|
+# ============================================================================
+# Encodes N in algebra_id, (i,j) in gen_idx as (i-1)*N + j
+# Product rule: |i⟩⟨j| × |k⟩⟨l| = δ_jk |i⟩⟨l|
+# Adjoint: (|i⟩⟨j|)† = |j⟩⟨i|
+
+"""
+    TransitionOperator(name, N, i, j, inds...)
+
+Create a transition operator |i⟩⟨j| for an N-level system.
+- `name`: operator name (symbol)  
+- `N`: dimension of the system (number of levels)
+- `i`, `j`: level indices (1 to N)
+- `inds...`: optional site/mode indices
+"""
+function TransitionOperator(name, N::Integer, i::Integer, j::Integer, inds...)
+    (1 ≤ i ≤ N && 1 ≤ j ≤ N) || throw(ArgumentError("Level indices must be in 1:$N, got i=$i, j=$j"))
+    encoded = UInt16((i - 1) * N + j)
+    BaseOperator(Transition_, QuOpName(name), make_indices(inds...), UInt16(N), encoded)
+end
+
+# Decode (i,j) from transition operator
+transition_levels(op::BaseOperator) = (op.t == Transition_) ? 
+    (Int((op.gen_idx - 1) ÷ op.algebra_id) + 1, Int((op.gen_idx - 1) % op.algebra_id) + 1) : 
+    throw(ArgumentError("Not a transition operator"))
+transition_dim(op::BaseOperator) = op.t == Transition_ ? Int(op.algebra_id) : throw(ArgumentError("Not a transition operator"))
+
+"""
+    σ(name, i, j, inds...)
+
+Shorthand for 2-level transition operator |i⟩⟨j|. Equivalent to `TransitionOperator(name, 2, i, j, inds...)`.
+"""
+σ(name, i::Integer, j::Integer, inds...) = TransitionOperator(name, 2, i, j, inds...)
+
+"""
+    nlevel_ops(N, name, inds...)
+
+Create all N² transition operators |i⟩⟨j| for an N-level system.
+Returns an N×N matrix where entry [i,j] is |i⟩⟨j|.
+"""
+function nlevel_ops(N::Integer, name, inds...)
+    [QuExpr(TransitionOperator(name, N, i, j, inds...)) for i in 1:N, j in 1:N]
+end
 
 for (op,desc) in (
     (:BosonDestroy,"bosonic annihilation"),

@@ -51,6 +51,14 @@ function Base.print(io::IO, A::BaseOperator)
         if !isempty(assignedinds(B.inds))
             print(io, "(", B.inds..., ")")
         end
+    elseif B.t == Transition_
+        # For transition operators |i⟩⟨j|, show as σⁱʲ or name^{ij}
+        N = Int(B.algebra_id)
+        i, j = (B.gen_idx - 1) ÷ N + 1, (B.gen_idx - 1) % N + 1
+        print(io, B.name, superscript(i), superscript(j))
+        if !isempty(assignedinds(B.inds))
+            print(io, "(", B.inds..., ")")
+        end
     else
         print(io, B.name, BaseOpType_sym[Int(B.t)], "(", B.inds..., ")")
     end
@@ -168,6 +176,13 @@ latexindstr(inds) = isempty(assignedinds(inds)) ? "" : "_{$(latexify.(inds)...)}
         gen_idx_str = "^{$(Int(B.gen_idx))}"
         inds_str = latexindstr(B.inds)
         return LaTeXString("{$name_latex}$gen_idx_str$inds_str")
+    elseif B.t == Transition_
+        # For transition operators: |i⟩⟨j| shown as name^{ij}
+        N = Int(B.algebra_id)
+        i, j = (B.gen_idx - 1) ÷ N + 1, (B.gen_idx - 1) % N + 1
+        name_latex = unicode_to_latex(B.name)
+        inds_str = latexindstr(B.inds)
+        return LaTeXString("{$name_latex}^{$i$j}$inds_str")
     else
         return LaTeXString("{$(unicode_to_latex(B.name))}$(latexindstr(B.inds))$(BaseOpType_latex[Int(B.t)])")
     end

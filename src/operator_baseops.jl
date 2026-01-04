@@ -183,7 +183,17 @@ end
 
 comm(A,B) = A*B - B*A
 
-Base.adjoint(A::BaseOperator) = BaseOperator(BaseOpType_adj[Int(A.t)], A.name, A.inds, A.algebra_id, A.gen_idx)
+function Base.adjoint(A::BaseOperator)
+    if A.t == Transition_
+        # |i⟩⟨j|† = |j⟩⟨i|: swap i and j
+        N = Int(A.algebra_id)
+        i, j = (A.gen_idx - 1) ÷ N + 1, (A.gen_idx - 1) % N + 1
+        new_encoded = UInt16((j - 1) * N + i)
+        return BaseOperator(Transition_, A.name, A.inds, A.algebra_id, new_encoded)
+    else
+        return BaseOperator(BaseOpType_adj[Int(A.t)], A.name, A.inds, A.algebra_id, A.gen_idx)
+    end
+end
 Base.adjoint(A::BaseOpProduct) = BaseOpProduct(adjoint.(view(A.v, lastindex(A.v):-1:1)))
 Base.adjoint(A::T) where {T<:Union{ExpVal,Corr}} = T(adjoint(A.ops))
 Base.adjoint(A::Param) = A.state=='r' ? A : Param(A.name,A.state=='n' ? 'c' : 'n',A.inds)
@@ -485,7 +495,77 @@ function _exchange(A::BaseOperator,B::BaseOperator)::Tuple{Int,Union{ExchangeRes
         return _exchange_lie_algebra_generators(A, B)
     end
 
+    # Transition operators commute with all other operator types
+    if A.t == Transition_ && B.t != Transition_
+        return (1, nothing)
+    elseif A.t != Transition_ && B.t == Transition_
+        return (1, nothing)
+    end
+
+    # Transition operator commutation: [|i⟩⟨j|, |k⟩⟨l|] = δ_jk |i⟩⟨l| - δ_il |k⟩⟨j|
+    if A.t == Transition_ && B.t == Transition_
+        return _exchange_transition_operators(A, B)
+    end
+
     error("_exchange should never reach this! A=$A, B=$B.")
+end
+
+"""
+    _exchange_transition_operators(A, B)
+
+Handle exchange of two transition operators.
+B A = A B + [B, A]
+
+[|i⟩⟨j|, |k⟩⟨l|] = δ_jk |i⟩⟨l| - δ_il |k⟩⟨j|
+
+For same system (name, indices, N): returns (1, ExchangeResult).
+"""
+function _exchange_transition_operators(A::BaseOperator, B::BaseOperator)
+    # Different systems commute
+    if A.name != B.name || A.algebra_id != B.algebra_id
+        return (1, nothing)
+    end
+    
+    # Check index match
+    dd = δ(A.inds, B.inds)
+    if dd === nothing
+        return (1, nothing)
+    end
+    
+    N = Int(A.algebra_id)
+    i_A, j_A = (A.gen_idx - 1) ÷ N + 1, (A.gen_idx - 1) % N + 1
+    i_B, j_B = (B.gen_idx - 1) ÷ N + 1, (B.gen_idx - 1) % N + 1
+    
+    # [|i_A⟩⟨j_A|, |i_B⟩⟨j_B|] = δ_{j_A,i_B} |i_A⟩⟨j_B| - δ_{i_A,j_B} |i_B⟩⟨j_A|
+    # We want B A - A B = [B, A] = -[A, B]
+    # So: B A = A B + [B, A] = A B - [A, B]
+    #        = A B - (δ_{j_A,i_B} |i_A⟩⟨j_B| - δ_{i_A,j_B} |i_B⟩⟨j_A|)
+    #        = A B + δ_{i_A,j_B} |i_B⟩⟨j_A| - δ_{j_A,i_B} |i_A⟩⟨j_B|
+    
+    terms = Tuple{ComplexF64, BaseOperator}[]
+    
+    if i_A == j_B
+        # Term: +|i_B⟩⟨j_A|
+        enc = UInt16((i_B - 1) * N + j_A)
+        push!(terms, (ComplexF64(1.0), BaseOperator(Transition_, A.name, A.inds, A.algebra_id, enc)))
+    end
+    
+    if j_A == i_B
+        # Term: -|i_A⟩⟨j_B|
+        enc = UInt16((i_A - 1) * N + j_B)
+        push!(terms, (ComplexF64(-1.0), BaseOperator(Transition_, A.name, A.inds, A.algebra_id, enc)))
+    end
+    
+    if isempty(terms)
+        return (1, nothing)
+    elseif length(terms) == 1
+        coeff = terms[1][1]
+        # Try to convert to rational
+        coeff_r = real(coeff) == 1.0 ? 1//1 : real(coeff) == -1.0 ? -1//1 : real(coeff)
+        return (1, ExchangeResult(Complex{Rational{Int}}(coeff_r, 0), dd, terms[1][2]))
+    else
+        return (1, ExchangeResult(0//1, dd, terms))
+    end
 end
 
 """
@@ -609,8 +689,35 @@ function _contract(A::BaseOperator,B::BaseOperator)::Union{LegacyContractionResu
         end
     elseif A.t == LieAlgebraGen_ && B.t == LieAlgebraGen_
         return _contract_lie_algebra_generators(A, B)
+    elseif A.t == Transition_ && B.t == Transition_
+        return _contract_transition_operators(A, B)
     else
         return (false,zero(ComplexInt),nothing)
+    end
+end
+
+"""
+    _contract_transition_operators(A, B)
+
+Product rule for transition operators: |i⟩⟨j| × |k⟩⟨l| = δ_jk |i⟩⟨l|
+"""
+function _contract_transition_operators(A::BaseOperator, B::BaseOperator)
+    # Different systems or indices don't contract
+    (A.name == B.name && A.inds == B.inds && A.algebra_id == B.algebra_id) || 
+        return (false, zero(ComplexInt), nothing)
+    
+    N = Int(A.algebra_id)
+    i_A, j_A = (A.gen_idx - 1) ÷ N + 1, (A.gen_idx - 1) % N + 1
+    i_B, j_B = (B.gen_idx - 1) ÷ N + 1, (B.gen_idx - 1) % N + 1
+    
+    # |i_A⟩⟨j_A| × |i_B⟩⟨j_B| = δ_{j_A, i_B} |i_A⟩⟨j_B|
+    if j_A == i_B
+        new_encoded = UInt16((i_A - 1) * N + j_B)
+        new_op = BaseOperator(Transition_, A.name, A.inds, A.algebra_id, new_encoded)
+        return (true, one(ComplexInt), new_op)
+    else
+        # Orthogonal: product is zero
+        return (true, zero(ComplexInt), nothing)
     end
 end
 

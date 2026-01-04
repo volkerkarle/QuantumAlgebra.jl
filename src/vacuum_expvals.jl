@@ -173,6 +173,30 @@ function _lie_gen_vacuum_annihilates_left(algebra_id::UInt16, gen_idx::UInt16)
     return _lie_gen_annihilates_vacuum(algebra_id, gen_idx)
 end
 
+# ============================================================================
+# Vacuum expectation values for transition operators |i⟩⟨j|
+# ============================================================================
+# For N-level systems, vacuum is |N⟩ (ground state = lowest level)
+# - |N⟩⟨N| |N⟩ = |N⟩, so it's identity on vacuum: eigenvalue = 1
+# - |i⟩⟨N| |N⟩ = |i⟩ for i≠N: raises state, doesn't annihilate
+# - |N⟩⟨j| |N⟩ = 0 for j≠N: requires ⟨j| overlap with |N⟩
+# - |i⟩⟨j| |N⟩ = 0 for j≠N: same reason
+
+"""Return eigenvalue if |N⟩ is eigenstate, nothing otherwise."""
+function _transition_vacuum_eigenvalue(N::Int, i::Int, j::Int)
+    (i == N && j == N) ? 1.0 : nothing
+end
+
+"""Return true if |i⟩⟨j| annihilates vacuum |N⟩."""
+function _transition_annihilates_vacuum(N::Int, i::Int, j::Int)
+    j != N  # |i⟩⟨j| |N⟩ = δ_{jN} |i⟩, so zero when j≠N
+end
+
+"""Return true if ⟨N| |i⟩⟨j| = 0."""
+function _transition_annihilates_left(N::Int, i::Int, j::Int)
+    i != N  # ⟨N| |i⟩⟨j| = δ_{Ni} ⟨j|, so zero when i≠N
+end
+
 # helper function that is only called on normal-ordered terms that only contain
 # operators that are in the vacuum state
 function _Avac(BO::BaseOpProduct,fac)
@@ -203,6 +227,20 @@ function _Avac(BO::BaseOpProduct,fac)
             else
                 # Off-diagonal generator that doesn't annihilate: produces different state
                 # Can't simplify further, keep operator
+                break
+            end
+        elseif O.t == Transition_
+            # Transition operator |i⟩⟨j| acting on vacuum |N⟩
+            N = Int(O.algebra_id)
+            i, j = (O.gen_idx - 1) ÷ N + 1, (O.gen_idx - 1) % N + 1
+            if _transition_annihilates_vacuum(N, i, j)
+                return (BO, zero(fac))
+            end
+            eigenval = _transition_vacuum_eigenvalue(N, i, j)
+            if eigenval !== nothing
+                fac = fac * eigenval
+            else
+                # Raises to different state, can't simplify
                 break
             end
         else
@@ -244,6 +282,19 @@ function _vacA(BO::BaseOpProduct,fac)
                 fac = fac * eigenval
             else
                 # Off-diagonal generator: produces different state, can't simplify
+                break
+            end
+        elseif O.t == Transition_
+            # ⟨N| |i⟩⟨j| = δ_{Ni} ⟨j|
+            N = Int(O.algebra_id)
+            i, j = (O.gen_idx - 1) ÷ N + 1, (O.gen_idx - 1) % N + 1
+            if _transition_annihilates_left(N, i, j)
+                return (BO, zero(fac))
+            end
+            eigenval = _transition_vacuum_eigenvalue(N, i, j)
+            if eigenval !== nothing
+                fac = fac * eigenval
+            else
                 break
             end
         else
