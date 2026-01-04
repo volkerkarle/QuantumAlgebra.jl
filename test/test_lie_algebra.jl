@@ -1027,3 +1027,277 @@ end
     end
 
 end
+
+# =============================================================================
+# SO(3) Angular Momentum Tests
+# =============================================================================
+# SO(3) is the Lie group of 3D rotations. Its Lie algebra so(3) is isomorphic
+# to su(2), so SO(3) is implemented as convenience wrappers around SU(2).
+# =============================================================================
+
+@testset "SO(3) Angular Momentum" begin
+
+    # =========================================================================
+    # Generator Creation
+    # =========================================================================
+    @testset "Generator creation" begin
+        
+        @testset "so3_generators" begin
+            L = so3_generators(:L)
+            @test length(L) == 3
+            @test all(l isa QuExpr for l in L)
+            
+            # Verify they're equivalent to SU(2) generators
+            T = su_generators(2, :L)
+            for i in 1:3
+                @test L[i] == T[i]
+            end
+        end
+
+        @testset "so3_generator" begin
+            @test so3_generator(:L, 1) == so3_generators(:L)[1]
+            @test so3_generator(:L, 2) == so3_generators(:L)[2]
+            @test so3_generator(:L, 3) == so3_generators(:L)[3]
+            
+            # Error for invalid index
+            @test_throws ArgumentError so3_generator(:L, 0)
+            @test_throws ArgumentError so3_generator(:L, 4)
+        end
+
+        @testset "Named generators Lx, Ly, Lz" begin
+            L = so3_generators(:L)
+            @test Lx(:L) == L[1]
+            @test Ly(:L) == L[2]
+            @test Lz(:L) == L[3]
+            
+            # Default name
+            @test Lx() == so3_generator(:L, 1)
+            @test Ly() == so3_generator(:L, 2)
+            @test Lz() == so3_generator(:L, 3)
+        end
+
+        @testset "With indices" begin
+            L_i = so3_generators(:L, :i)
+            L_j = so3_generators(:L, :j)
+            @test L_i[1] != L_j[1]  # Different sites
+            
+            L_1 = so3_generators(:L, 1)
+            L_2 = so3_generators(:L, 2)
+            @test L_1[1] != L_2[1]
+            
+            # Named generators with indices
+            @test Lx(:L, :i) == L_i[1]
+            @test Ly(:L, :j) == L_j[2]
+        end
+
+        @testset "Hermiticity" begin
+            L = so3_generators(:L)
+            for l in L
+                @test l' == l
+            end
+        end
+    end
+
+    # =========================================================================
+    # Commutation Relations
+    # =========================================================================
+    @testset "Commutation relations" begin
+        L = so3_generators(:L)
+        
+        @testset "[Lᵃ, Lᵇ] = i εᵃᵇᶜ Lᶜ" begin
+            @test normal_form(comm(L[1], L[2])) == 1im * L[3]
+            @test normal_form(comm(L[2], L[3])) == 1im * L[1]
+            @test normal_form(comm(L[3], L[1])) == 1im * L[2]
+            
+            # Antisymmetry
+            @test normal_form(comm(L[2], L[1])) == -1im * L[3]
+        end
+
+        @testset "Self-commutation" begin
+            for a in 1:3
+                @test iszero(normal_form(comm(L[a], L[a])))
+            end
+        end
+
+        @testset "Jacobi identity" begin
+            jacobi = comm(L[1], comm(L[2], L[3])) + 
+                     comm(L[2], comm(L[3], L[1])) + 
+                     comm(L[3], comm(L[1], L[2]))
+            @test iszero(normal_form(jacobi))
+        end
+
+        @testset "With indices" begin
+            L_i = so3_generators(:L, :i)
+            L_j = so3_generators(:L, :j)
+            
+            # Same site
+            @test normal_form(comm(L_i[1], L_i[2])) == 1im * L_i[3]
+            
+            # Different sites: proportional to δ
+            @test normal_form(comm(L_i[1], L_j[2])) == myδ_local(:i, :j) * 1im * so3_generator(:L, 3, :i)
+        end
+    end
+
+    # =========================================================================
+    # Ladder Operators
+    # =========================================================================
+    @testset "Ladder operators" begin
+        L = so3_generators(:L)
+        Lz_op = L[3]
+        Lp = L_raising(:L)
+        Lm = L_lowering(:L)
+
+        @testset "Construction" begin
+            @test Lp == L[1] + 1im * L[2]
+            @test Lm == L[1] - 1im * L[2]
+            
+            Lp2, Lm2, Lz2 = L_ladder_operators(:J)
+            @test Lp2 == L_raising(:J)
+            @test Lm2 == L_lowering(:J)
+            @test Lz2 == so3_generator(:J, 3)
+        end
+
+        @testset "With indices" begin
+            Lp_i = L_raising(:L, :i)
+            Lm_i = L_lowering(:L, :i)
+            L_i = so3_generators(:L, :i)
+            @test Lp_i == L_i[1] + 1im * L_i[2]
+            @test Lm_i == L_i[1] - 1im * L_i[2]
+        end
+
+        @testset "Commutation relations" begin
+            @test normal_form(comm(Lz_op, Lp)) == Lp
+            @test normal_form(comm(Lz_op, Lm)) == -Lm
+            @test normal_form(comm(Lp, Lm)) == 2Lz_op
+        end
+
+        @testset "Products" begin
+            @test normal_form(Lp * Lm) == 0.5 + Lz_op
+            @test normal_form(Lm * Lp) == 0.5 - Lz_op
+        end
+
+        @testset "Hermiticity" begin
+            @test Lp' == Lm
+            @test Lm' == Lp
+        end
+    end
+
+    # =========================================================================
+    # Product Rules  
+    # =========================================================================
+    @testset "Product rules" begin
+        L = so3_generators(:L)
+        
+        @testset "LᵃLᵃ = 1/4" begin
+            @test normal_form(L[1] * L[1]) ≈ QuExpr(0.25)
+            @test normal_form(L[2] * L[2]) ≈ QuExpr(0.25)
+            @test normal_form(L[3] * L[3]) ≈ QuExpr(0.25)
+        end
+
+        @testset "Off-diagonal products" begin
+            @test normal_form(L[1] * L[2]) ≈ 0.5im * L[3]
+            @test normal_form(L[2] * L[1]) ≈ -0.5im * L[3]
+        end
+    end
+
+    # =========================================================================
+    # Casimir Operator
+    # =========================================================================
+    @testset "Casimir operator L²" begin
+        L = so3_generators(:L)
+        
+        # L² = L·L = Lx² + Ly² + Lz² = 3/4 (for fundamental rep)
+        L_squared = sum(L[a] * L[a] for a in 1:3)
+        @test normal_form(L_squared) ≈ QuExpr(0.75)
+    end
+
+    # =========================================================================
+    # Vacuum Expectation Values
+    # =========================================================================
+    @testset "Vacuum expectation values" begin
+        L = so3_generators(:L)
+
+        @testset "Single generators" begin
+            # Vacuum is lowest weight state, Lz eigenvalue is -1/2
+            @test vacExpVal(L[3]) ≈ QuExpr(-0.5)
+            @test iszero(vacExpVal(L[1]))
+            @test iszero(vacExpVal(L[2]))
+        end
+
+        @testset "Products" begin
+            @test vacExpVal(L[1] * L[1]) ≈ QuExpr(0.25)
+            @test vacExpVal(L[2] * L[2]) ≈ QuExpr(0.25)
+            @test vacExpVal(L[3] * L[3]) ≈ QuExpr(0.25)
+        end
+
+        @testset "Ladder operators" begin
+            Lp = L_raising(:L)
+            Lm = L_lowering(:L)
+            
+            @test iszero(vacExpVal(Lp))
+            @test iszero(vacExpVal(Lm))
+            @test vacExpVal(Lp * Lm) ≈ QuExpr(0.0)
+            @test vacExpVal(Lm * Lp) ≈ QuExpr(1.0)
+        end
+    end
+
+    # =========================================================================
+    # Equivalence to SU(2)
+    # =========================================================================
+    @testset "Equivalence to SU(2)" begin
+        # so(3) ≅ su(2), so they should be mathematically identical
+        
+        L = so3_generators(:L)
+        T = su_generators(2, :T)
+        
+        @testset "Same algebra structure" begin
+            # Same commutation relations (modulo naming)
+            comm_L = normal_form(comm(L[1], L[2]))
+            comm_T = normal_form(comm(T[1], T[2]))
+            
+            # Both should give i × (third generator)
+            @test comm_L == 1im * L[3]
+            @test comm_T == 1im * T[3]
+        end
+
+        @testset "Same Casimir" begin
+            L_squared = sum(L[a] * L[a] for a in 1:3)
+            T_squared = sum(T[a] * T[a] for a in 1:3)
+            
+            @test normal_form(L_squared) == normal_form(T_squared)
+        end
+
+        @testset "Ladder operators equivalent" begin
+            Lp = L_raising(:L)
+            Tp = su2_raising(:T)
+            
+            L_comp = so3_generators(:L)
+            T_comp = su_generators(2, :T)
+            
+            # Same structure: T⁺ = T¹ + iT²
+            @test Lp == L_comp[1] + 1im * L_comp[2]
+            @test Tp == T_comp[1] + 1im * T_comp[2]
+        end
+    end
+
+    # =========================================================================
+    # Output Tests
+    # =========================================================================
+    @testset "Output" begin
+        L = so3_generators(:L)
+        
+        @testset "String representation" begin
+            @test occursin("L", string(L[1]))
+            @test occursin("¹", string(L[1]))
+            @test occursin("²", string(L[2]))
+            @test occursin("³", string(L[3]))
+        end
+
+        @testset "LaTeX representation" begin
+            l1 = latex(L[1])
+            @test occursin("L", l1)
+            @test occursin("^{1}", l1)
+        end
+    end
+
+end

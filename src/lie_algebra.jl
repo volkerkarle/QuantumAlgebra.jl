@@ -452,3 +452,37 @@ gen_index_to_pauli(i::Int) = i == SU2_SIGMA_X_INDEX ? :x : i == SU2_SIGMA_Y_INDE
 
 # Note: su_generator and su_generators are thin wrappers that will be defined
 # after operator_defs.jl is loaded. See the end of operator_defs.jl for these.
+
+# ============================================================================
+# SO(3) Lie Algebra Support
+# ============================================================================
+#
+# SO(3) is the group of 3D rotations. Its Lie algebra so(3) is isomorphic to 
+# su(2), with the same structure constants (Levi-Civita symbol):
+#
+#   [Lᵃ, Lᵇ] = i εᵃᵇᶜ Lᶜ
+#
+# The key difference is physical interpretation:
+# - SU(2): spin operators (allows half-integer spin: s = 1/2, 1, 3/2, ...)
+# - SO(3): angular momentum operators (integer only: ℓ = 0, 1, 2, ...)
+#
+# Since the Lie algebras are isomorphic, we implement SO(3) as convenience
+# wrappers around SU(2), using the conventional angular momentum notation:
+# - Lx, Ly, Lz instead of T¹, T², T³
+# - L₊, L₋ instead of T⁺, T⁻
+#
+# The algebra ID for SO(3) is the same as SU(2) since they share structure.
+# ============================================================================
+
+"""
+    SO3_ALGEBRA_ID
+
+The algebra registry ID for SO(3). Since so(3) ≅ su(2), this is the same as
+`SU2_ALGEBRA_ID`. The algebras share the same structure constants (Levi-Civita).
+"""
+const SO3_ALGEBRA_ID = SU2_ALGEBRA_ID
+
+# Index mapping for angular momentum components
+const SO3_LX_INDEX = SU2_SIGMA_X_INDEX  # Lx corresponds to generator 1
+const SO3_LY_INDEX = SU2_SIGMA_Y_INDEX  # Ly corresponds to generator 2
+const SO3_LZ_INDEX = SU2_SIGMA_Z_INDEX  # Lz corresponds to generator 3

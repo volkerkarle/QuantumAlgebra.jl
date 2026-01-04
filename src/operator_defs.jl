@@ -955,3 +955,154 @@ function su2_ladder_operators(name::Symbol=:T, inds...)
 end
 
 export su2_ladder_operators
+
+# ============================================================================
+# SO(3) Angular Momentum Operators
+# ============================================================================
+#
+# SO(3) is the Lie group of 3D rotations. Its Lie algebra so(3) is isomorphic
+# to su(2), so we implement SO(3) as convenience wrappers around SU(2).
+#
+# Physical interpretation:
+# - SO(3): orbital angular momentum (integer ℓ = 0, 1, 2, ...)
+# - SU(2): spin angular momentum (half-integer allowed: s = 1/2, 1, 3/2, ...)
+#
+# Commutation relations: [Lᵃ, Lᵇ] = i εᵃᵇᶜ Lᶜ (same as SU(2))
+#
+# Standard notation:
+# - Lx, Ly, Lz: Cartesian components
+# - L₊ = Lx + iLy: raising operator
+# - L₋ = Lx - iLy: lowering operator
+# ============================================================================
+
+export so3_generator, so3_generators
+export Lx, Ly, Lz
+export L_raising, L_lowering, L_ladder_operators
+
+"""
+    so3_generator(name::Symbol, gen_idx::Int, inds...)
+
+Create a single SO(3) angular momentum generator Lᵃ where a = gen_idx ∈ {1, 2, 3}.
+
+The generators correspond to:
+- gen_idx = 1: Lx (rotation around x-axis)
+- gen_idx = 2: Ly (rotation around y-axis)
+- gen_idx = 3: Lz (rotation around z-axis)
+
+Since so(3) ≅ su(2), this is equivalent to `su_generator(2, name, gen_idx, inds...)`.
+
+# Example
+```julia
+Lx = so3_generator(:L, 1)
+Ly = so3_generator(:L, 2)
+Lz = so3_generator(:L, 3)
+comm(Lx, Ly)  # => i*Lz
+```
+"""
+function so3_generator(name::Symbol, gen_idx::Int, inds...)
+    1 <= gen_idx <= 3 || throw(ArgumentError("SO(3) generator index must be 1, 2, or 3, got $gen_idx"))
+    su_generator(2, name, gen_idx, inds...)
+end
+
+"""
+    so3_generators(name::Symbol, inds...)
+
+Create all three SO(3) angular momentum generators [Lx, Ly, Lz].
+
+Returns a vector of three operators satisfying [Lᵃ, Lᵇ] = i εᵃᵇᶜ Lᶜ.
+
+# Example
+```julia
+L = so3_generators(:L)
+Lx, Ly, Lz = L[1], L[2], L[3]
+comm(Lx, Ly)  # => i*Lz
+comm(Ly, Lz)  # => i*Lx
+comm(Lz, Lx)  # => i*Ly
+```
+"""
+function so3_generators(name::Symbol, inds...)
+    su_generators(2, name, inds...)
+end
+
+"""
+    Lx(name::Symbol=:L, inds...)
+
+Create the SO(3) angular momentum operator Lx (x-component).
+
+# Example
+```julia
+Lx_op = Lx(:L)
+Ly_op = Ly(:L)
+comm(Lx_op, Ly_op)  # => i*Lz
+```
+"""
+function Lx(name::Symbol=:L, inds...)
+    so3_generator(name, 1, inds...)
+end
+
+"""
+    Ly(name::Symbol=:L, inds...)
+
+Create the SO(3) angular momentum operator Ly (y-component).
+"""
+function Ly(name::Symbol=:L, inds...)
+    so3_generator(name, 2, inds...)
+end
+
+"""
+    Lz(name::Symbol=:L, inds...)
+
+Create the SO(3) angular momentum operator Lz (z-component).
+"""
+function Lz(name::Symbol=:L, inds...)
+    so3_generator(name, 3, inds...)
+end
+
+"""
+    L_raising(name::Symbol=:L, inds...)
+
+Create the SO(3) raising operator L₊ = Lx + iLy.
+
+This operator raises the eigenvalue of Lz by 1.
+
+# Example
+```julia
+Lp = L_raising(:L)
+Lm = L_lowering(:L)
+Lz_op = Lz(:L)
+comm(Lz_op, Lp)  # => Lp
+comm(Lp, Lm)     # => 2*Lz
+```
+"""
+function L_raising(name::Symbol=:L, inds...)
+    su2_raising(name, inds...)
+end
+
+"""
+    L_lowering(name::Symbol=:L, inds...)
+
+Create the SO(3) lowering operator L₋ = Lx - iLy.
+
+This operator lowers the eigenvalue of Lz by 1.
+"""
+function L_lowering(name::Symbol=:L, inds...)
+    su2_lowering(name, inds...)
+end
+
+"""
+    L_ladder_operators(name::Symbol=:L, inds...)
+
+Return a tuple (L₊, L₋, Lz) of SO(3) ladder operators and the diagonal generator.
+
+# Example
+```julia
+Lp, Lm, Lz_op = L_ladder_operators(:L)
+# Commutation relations:
+comm(Lz_op, Lp)  # => Lp
+comm(Lz_op, Lm)  # => -Lm
+comm(Lp, Lm)     # => 2*Lz
+```
+"""
+function L_ladder_operators(name::Symbol=:L, inds...)
+    su2_ladder_operators(name, inds...)
+end
