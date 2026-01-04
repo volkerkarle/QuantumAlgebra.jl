@@ -749,6 +749,9 @@ function _contract_lie_algebra_generators(A::BaseOperator, B::BaseOperator)
     
     a, b = Int(A.gen_idx), Int(B.gen_idx)
     
+    # Get the algebra to determine which fast path to use
+    alg = get_algebra(A.algebra_id)
+    
     # =========================================================================
     # FAST PATH: SU(2) - use inline tuple for direct processing in normal_order!
     # =========================================================================
@@ -760,7 +763,7 @@ function _contract_lie_algebra_generators(A::BaseOperator, B::BaseOperator)
     # Diagonal case (a == b): T^a T^a = (1/4)I
     # Off-diagonal case: T^a T^b = (i/2)ε_{abc}T^c
     
-    if A.algebra_id == SU2_ALGEBRA_ID
+    if alg isa SUAlgebra{2}
         if a == b
             # Diagonal case: T^a T^a = (1/4)I - only identity, no generator
             # Return (true, :su2_inline, id_coeff::Float64, nothing)
@@ -782,7 +785,7 @@ function _contract_lie_algebra_generators(A::BaseOperator, B::BaseOperator)
     # Returns (true, :su3_inline, name, inds, (id_coeff, c1, coeff1, c2, coeff2))
     # Coefficients are symbolic (Rational, √3) by default, Float64 in high-speed mode
     
-    if A.algebra_id == SU3_ALGEBRA_ID
+    if alg isa SUAlgebra{3}
         coeffs = su3_product_coeffs(a, b)
         return (true, :su3_inline, A.name, A.inds, coeffs)
     end
@@ -790,7 +793,6 @@ function _contract_lie_algebra_generators(A::BaseOperator, B::BaseOperator)
     # =========================================================================
     # GENERAL PATH: Use structure constant lookup (for SU(N) with N > 3)
     # =========================================================================
-    alg = get_algebra(A.algebra_id)
     N = algebra_dim(alg)
     
     # Identity coefficient: (1/2N) δ_{ab}
