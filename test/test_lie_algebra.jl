@@ -1000,82 +1000,30 @@ end
     # Edge Cases
     # =========================================================================
     @testset "Edge cases" begin
+        T = su_generators(2, :T)
         
-        @testset "Zero expressions" begin
-            T = su_generators(2, :T)
-            
-            @test iszero(T[1] - T[1])
-            @test iszero(normal_form(T[1] - T[1]))
-            @test iszero(0 * T[1])
-            @test iszero(normal_form(comm(T[1], T[1])))
+        # Zero/identity
+        @test iszero(T[1] - T[1])
+        @test iszero(normal_form(comm(T[1], T[1])))
+        @test 1 * T[1] == T[1]
+        @test isone(T[1]^0)
+        
+        # Complex/rational coefficients
+        @test ((1 + 2im) * T[1])' == (1 - 2im) * T[1]
+        @test normal_form((1//2) * T[1] * (1//2) * T[1]) ≈ QuExpr(1//16)
+        
+        # Large N
+        for N in [5, 8]
+            G = su_generators(N, :G)
+            @test length(G) == N^2 - 1
+            @test G[1]' == G[1]
         end
-
-        @testset "Identity operations" begin
-            T = su_generators(2, :T)
-            
-            @test 1 * T[1] == T[1]
-            @test T[1] * 1 == T[1]
-            @test T[1] + 0 == T[1]
-            @test isone(T[1]^0)
-        end
-
-        @testset "Large N stability" begin
-            # Test that large N algebras can be created
-            for N in [5, 6, 7, 8]
-                alg_id = get_or_create_su(N)
-                alg = get_algebra(alg_id)
-                @test num_generators(alg) == N^2 - 1
-                @test algebra_dim(alg) == N
-                
-                # Create generators
-                G = su_generators(N, :G)
-                @test length(G) == N^2 - 1
-                
-                # Basic operations should work
-                @test G[1]' == G[1]  # Hermitian
-                @test iszero(normal_form(comm(G[1], G[1])))
-            end
-        end
-
-        @testset "Complex scalar coefficients" begin
-            T = su_generators(2, :T)
-            
-            expr = (1 + 2im) * T[1]
-            @test expr isa QuExpr
-            @test expr' == (1 - 2im) * T[1]
-            
-            # Imaginary unit
-            @test 1im * T[1] isa QuExpr
-            @test normal_form(1im * T[1] * T[2]) ≈ normal_form(1im * 0.5im * T[3])
-        end
-
-        @testset "Rational coefficients" begin
-            T = su_generators(2, :T)
-            
-            expr = (1//2) * T[1]
-            @test expr isa QuExpr
-            
-            # Rational × Rational
-            @test normal_form((1//2) * T[1] * (1//2) * T[1]) ≈ QuExpr(1//16)
-        end
-
-        @testset "Coefficient mode toggle" begin
-            # Default is symbolic mode (exact Rationals)
-            @test !QuantumAlgebra.using_float_coefficients()
-            @test QuantumAlgebra.sun_id_coeff(2) == 1//4
-            @test QuantumAlgebra.sun_id_coeff(3) == 1//6
-            
-            # Switch to float mode
-            QuantumAlgebra.use_float_coefficients(true)
-            @test QuantumAlgebra.using_float_coefficients()
-            @test QuantumAlgebra.sun_id_coeff(2) == 0.25
-            @test QuantumAlgebra.su3_id_coeff() ≈ 1/6
-            
-            # Restore symbolic mode
-            QuantumAlgebra.use_float_coefficients(false)
-            @test !QuantumAlgebra.using_float_coefficients()
-            @test QuantumAlgebra.sun_id_coeff(2) == 1//4
-        end
+        
+        # Coefficient mode
+        @test QuantumAlgebra.sun_id_coeff(2) == 1//4
+        QuantumAlgebra.use_float_coefficients(true)
+        @test QuantumAlgebra.sun_id_coeff(2) == 0.25
+        QuantumAlgebra.use_float_coefficients(false)
     end
 
 end

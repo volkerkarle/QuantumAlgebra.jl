@@ -377,151 +377,72 @@ Uses the same Levi-Civita lookup as the TLS implementation.
 end
 
 # ============================================================================
-# Symbolic Coefficient System
+# Coefficient System for SU(N) Algebras
 # ============================================================================
-#
-# Provides exact coefficients for SU(N) algebra computations.
-# Default: Rational numbers + symbolic √3 (when Symbolics.jl loaded)
-# Float mode: Float64 for speed (use_float_coefficients(true))
+# Default: exact Rationals + symbolic √3. Float mode: use_float_coefficients(true)
 
-# Symbolic √3 provider - set by QuantumAlgebraSymbolicsExt
-const _symbolic_sqrt3_provider = Ref{Union{Nothing, Function}}(nothing)
-set_symbolic_sqrt3_provider(f::Function) = (_symbolic_sqrt3_provider[] = f)
-set_symbolic_sqrt3_provider(::Nothing) = (_symbolic_sqrt3_provider[] = nothing)
+const _symbolic_sqrt3_provider = Ref{Union{Nothing,Function}}(nothing)
+set_symbolic_sqrt3_provider(f) = (_symbolic_sqrt3_provider[] = f)
 
-# Get √3 value (symbolic if available, else Float64)
-function _sqrt3()
-    if using_float_coefficients()
-        1.7320508075688772
-    elseif _symbolic_sqrt3_provider[] !== nothing
-        _symbolic_sqrt3_provider[]()
-    else
-        1.7320508075688772  # Fallback
-    end
-end
+_sqrt3() = (_symbolic_sqrt3_provider[] !== nothing && !using_float_coefficients()) ? 
+           _symbolic_sqrt3_provider[]() : 1.7320508075688772
 
-# SU(N) identity coefficient: 1/(2N), generator coefficient: 1/2
-sun_id_coeff(N::Int) = using_float_coefficients() ? 1.0 / (2N) : 1 // (2N)
-sun_gen_coeff() = using_float_coefficients() ? 0.5 : 1 // 2
+sun_id_coeff(N::Int) = using_float_coefficients() ? 1.0/(2N) : 1//(2N)
+sun_gen_coeff() = using_float_coefficients() ? 0.5 : 1//2
 
 # ============================================================================
-# SU(3) Fast Path: Precomputed product coefficients
+# SU(3) Fast Path: Precomputed Products
 # ============================================================================
-# Product formula: λ^a λ^b = (1/6)δ_{ab}I + (1/2)(d^{abc} + i f^{abc})λ^c
-# Encoded as tuples: (has_id, c1, code1, c2, code2)
+# λ^a λ^b = (1/2N)δ_{ab}I + (1/2)(d^{abc} + if^{abc})λ^c
+# Encoded as (has_id, c1, code1, c2, code2) with coefficient codes 0-15
 
 const SU3_ALGEBRA_ID = UInt16(2)
 
-# Coefficient codes: 0=zero, 1-7=±1/2,±1/4,±i/2,±i/4, 8-15=√3 variants
-# Decode via lookup - Float64 values for codes 0-15
+# Float lookup for codes 0-15
 const _SU3_COEFF_FLOAT = (
-    0.0+0.0im, 0.5+0.0im, 0.25+0.0im, -0.25+0.0im,        # 0:zero 1:1/2 2:1/4 3:-1/4
-    0.0+0.5im, 0.0-0.5im, 0.0+0.25im, 0.0-0.25im,         # 4:i/2 5:-i/2 6:i/4 7:-i/4
-    0.28867513459481287+0.0im, -0.28867513459481287+0.0im,  # 8:√3/6 9:-√3/6
-    0.14433756729740643+0.0im, -0.14433756729740643+0.0im,  # 10:√3/12 11:-√3/12
-    0.4330127018922193+0.0im, -0.4330127018922193+0.0im,    # 12:√3/4 13:-√3/4
-    0.0+0.4330127018922193im, 0.0-0.4330127018922193im      # 14:i√3/4 15:-i√3/4
-)
+    0.0+0.0im, 0.5+0.0im, 0.25+0.0im, -0.25+0.0im, 0.0+0.5im, 0.0-0.5im, 0.0+0.25im, 0.0-0.25im,
+    0.28867513459481287+0.0im, -0.28867513459481287+0.0im, 0.14433756729740643+0.0im, -0.14433756729740643+0.0im,
+    0.4330127018922193+0.0im, -0.4330127018922193+0.0im, 0.0+0.4330127018922193im, 0.0-0.4330127018922193im)
 
-# Decode coefficient code to value (symbolic or float)
-function _su3_decode_coeff(code::Int)
+# Symbolic lookup for codes 0-7 (no √3)
+const _SU3_COEFF_RATIONAL = (0, 1//2, 1//4, -1//4, (1//2)*im, (-1//2)*im, (1//4)*im, (-1//4)*im)
+
+# Decode: codes 0-7 = rational, codes 8-15 = √3 variants
+@inline function _su3_decode_coeff(code::Int)
     using_float_coefficients() && return @inbounds _SU3_COEFF_FLOAT[code+1]
-    # Symbolic mode
-    code == 0 && return 0
-    code == 1 && return 1//2
-    code == 2 && return 1//4
-    code == 3 && return -1//4
-    code == 4 && return (1//2)*im
-    code == 5 && return (-1//2)*im
-    code == 6 && return (1//4)*im
-    code == 7 && return (-1//4)*im
-    # √3 terms
+    code < 8 && return @inbounds _SU3_COEFF_RATIONAL[code+1]
     s3 = _sqrt3()
-    code == 8 && return s3/6
-    code == 9 && return -s3/6
-    code == 10 && return s3/12
-    code == 11 && return -s3/12
-    code == 12 && return s3/4
-    code == 13 && return -s3/4
-    code == 14 && return s3/4 * im
-    code == 15 && return -s3/4 * im
-    error("Unknown SU(3) coefficient code: $code")
+    return (code == 8 ? s3/6 : code == 9 ? -s3/6 : code == 10 ? s3/12 : code == 11 ? -s3/12 :
+            code == 12 ? s3/4 : code == 13 ? -s3/4 : code == 14 ? s3*im/4 : -s3*im/4)
 end
 
-# SU(3) products encoded as (has_id, c1, code1, c2, code2)
-# Codes: 0=0, 1=1/2, 2=1/4, 3=-1/4, 4=i/2, 5=-i/2, 6=i/4, 7=-i/4
-#        8=√3/6, 9=-√3/6, 10=√3/12, 11=-√3/12, 12=√3/4, 13=-√3/4, 14=i√3/4, 15=-i√3/4
+# Product table: (has_id, c1, code1, c2, code2) for all 64 products
 const SU3_PRODUCTS_CODED = (
-    (true,8,8,0,0),(false,3,2,6,6),(false,2,2,5,6),(false,7,4,0,0),(false,3,7,6,2),(false,2,7,5,2),(false,4,5,0,0),(false,1,8,0,0),  # a=1
-    (false,3,2,6,7),(true,7,2,8,11),(false,1,2,4,6),(false,3,7,6,3),(false,7,6,8,14),(false,1,6,4,3),(false,2,2,5,7),(false,2,11,5,15),  # a=2
-    (false,2,2,5,7),(false,1,2,4,7),(true,7,3,8,11),(false,2,6,5,2),(false,1,6,4,2),(false,7,7,8,14),(false,3,3,6,6),(false,3,11,6,15),  # a=3
-    (false,7,5,0,0),(false,3,6,6,3),(false,2,7,5,2),(true,8,8,0,0),(false,3,2,6,6),(false,2,3,5,7),(false,1,4,0,0),(false,4,8,0,0),  # a=4
-    (false,3,6,6,2),(false,7,7,8,15),(false,1,7,4,2),(false,3,2,6,7),(true,7,2,8,11),(false,1,2,4,6),(false,2,6,5,2),(false,2,14,5,11),  # a=5
-    (false,2,6,5,2),(false,1,7,4,3),(false,7,6,8,15),(false,2,3,5,6),(false,1,2,4,7),(true,7,3,8,11),(false,3,7,6,3),(false,3,14,6,11),  # a=6
-    (false,4,4,0,0),(false,2,2,5,6),(false,3,3,6,7),(false,1,5,0,0),(false,2,7,5,2),(false,3,6,6,3),(true,8,8,0,0),(false,7,8,0,0),  # a=7
-    (false,1,8,0,0),(false,2,11,5,14),(false,3,11,6,14),(false,4,8,0,0),(false,2,15,5,11),(false,3,15,6,11),(false,7,8,0,0),(true,8,9,0,0)  # a=8
-)
+    (true,8,8,0,0),(false,3,2,6,6),(false,2,2,5,6),(false,7,4,0,0),(false,3,7,6,2),(false,2,7,5,2),(false,4,5,0,0),(false,1,8,0,0),
+    (false,3,2,6,7),(true,7,2,8,11),(false,1,2,4,6),(false,3,7,6,3),(false,7,6,8,14),(false,1,6,4,3),(false,2,2,5,7),(false,2,11,5,15),
+    (false,2,2,5,7),(false,1,2,4,7),(true,7,3,8,11),(false,2,6,5,2),(false,1,6,4,2),(false,7,7,8,14),(false,3,3,6,6),(false,3,11,6,15),
+    (false,7,5,0,0),(false,3,6,6,3),(false,2,7,5,2),(true,8,8,0,0),(false,3,2,6,6),(false,2,3,5,7),(false,1,4,0,0),(false,4,8,0,0),
+    (false,3,6,6,2),(false,7,7,8,15),(false,1,7,4,2),(false,3,2,6,7),(true,7,2,8,11),(false,1,2,4,6),(false,2,6,5,2),(false,2,14,5,11),
+    (false,2,6,5,2),(false,1,7,4,3),(false,7,6,8,15),(false,2,3,5,6),(false,1,2,4,7),(true,7,3,8,11),(false,3,7,6,3),(false,3,14,6,11),
+    (false,4,4,0,0),(false,2,2,5,6),(false,3,3,6,7),(false,1,5,0,0),(false,2,7,5,2),(false,3,6,6,3),(true,8,8,0,0),(false,7,8,0,0),
+    (false,1,8,0,0),(false,2,11,5,14),(false,3,11,6,14),(false,4,8,0,0),(false,2,15,5,11),(false,3,15,6,11),(false,7,8,0,0),(true,8,9,0,0))
 
-# SU(3) identity coefficient
-su3_id_coeff() = using_float_coefficients() ? 1/6 : 1//6
-
-"""
-    su3_product_coeffs(a::Int, b::Int)
-
-Get the product coefficients for λ^a λ^b in SU(3).
-Returns (id_coeff, c1, coeff1, c2, coeff2) where:
-- id_coeff: coefficient of identity (1/6 if a==b, 0 otherwise)
-- c1, coeff1: first generator index and coefficient
-- c2, coeff2: second generator index and coefficient (c2=0 if single term)
-
-In float mode, returns Float64/ComplexF64.
-In symbolic mode, returns exact Rational and symbolic √3 expressions.
-"""
 function su3_product_coeffs(a::Int, b::Int)
-    idx = (a - 1) * 8 + b
-    entry = SU3_PRODUCTS_CODED[idx]
-    has_id, c1, code1, c2, code2 = entry
-    
-    id_coeff = has_id ? su3_id_coeff() : (using_float_coefficients() ? 0.0 : 0)
-    coeff1 = _su3_decode_coeff(code1)
-    coeff2 = _su3_decode_coeff(code2)
-    
-    return (id_coeff, c1, coeff1, c2, coeff2)
+    has_id, c1, code1, c2, code2 = @inbounds SU3_PRODUCTS_CODED[(a-1)*8 + b]
+    id_coeff = has_id ? sun_id_coeff(3) : (using_float_coefficients() ? 0.0 : 0)
+    return (id_coeff, c1, _su3_decode_coeff(code1), c2, _su3_decode_coeff(code2))
 end
 
-"""
-    pauli_to_gen_index(pauli::Symbol)
-
-Convert Pauli matrix symbol (:x, :y, :z) to SU(2) generator index.
-"""
-function pauli_to_gen_index(pauli::Symbol)
-    pauli == :x && return SU2_SIGMA_X_INDEX
-    pauli == :y && return SU2_SIGMA_Y_INDEX
-    pauli == :z && return SU2_SIGMA_Z_INDEX
-    throw(ArgumentError("Unknown Pauli symbol: $pauli"))
-end
-
-"""
-    gen_index_to_pauli(idx::Int)
-
-Convert SU(2) generator index to Pauli matrix symbol.
-"""
-function gen_index_to_pauli(idx::Int)
-    idx == SU2_SIGMA_X_INDEX && return :x
-    idx == SU2_SIGMA_Y_INDEX && return :y
-    idx == SU2_SIGMA_Z_INDEX && return :z
-    throw(ArgumentError("Invalid SU(2) generator index: $idx"))
-end
+# Pauli <-> generator index conversion
+pauli_to_gen_index(p::Symbol) = p == :x ? SU2_SIGMA_X_INDEX : p == :y ? SU2_SIGMA_Y_INDEX : 
+                                 p == :z ? SU2_SIGMA_Z_INDEX : throw(ArgumentError("Unknown Pauli: $p"))
+gen_index_to_pauli(i::Int) = i == SU2_SIGMA_X_INDEX ? :x : i == SU2_SIGMA_Y_INDEX ? :y : 
+                              i == SU2_SIGMA_Z_INDEX ? :z : throw(ArgumentError("Invalid index: $i"))
 
 # ============================================================================
 # Ladder operator support for SU(2)
 # ============================================================================
-
-# σ± = (σx ± i σy) / 2, but in our convention T = σ/2, so:
-# T± = T_x ± i T_y = (σx ± i σy) / 2
-# 
-# The raising/lowering operators are not generators themselves but linear combinations.
-# We'll handle them separately in the operator definitions.
+# T± = T_x ± i T_y (raising/lowering operators)
 
 # ============================================================================
 # Convenience functions for creating SU(N) generator operators
