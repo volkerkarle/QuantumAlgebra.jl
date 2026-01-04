@@ -404,6 +404,137 @@ T^a T^b = (1/4)δ_{ab}I + (i/2)f_{abc}T^c
     end
 end
 
+# ============================================================================
+# SU(3) Fast Path: Precomputed product lookup table
+# ============================================================================
+#
+# For SU(3), products λ^a λ^b produce 1-2 generator terms plus optional identity.
+# We precompute all 64 products to eliminate Dict allocations and structure
+# constant lookups at runtime.
+#
+# Product formula: λ^a λ^b = (1/6)δ_{ab}I + (1/2)(d^{abc} + i f^{abc})λ^c
+
+const SU3_ALGEBRA_ID = UInt16(2)
+
+"""
+    SU3ProductEntry
+
+Precomputed result for λ^a λ^b product in SU(3).
+Stores identity coefficient and up to 2 generator terms.
+
+# Fields
+- `id_coeff::Float64`: Coefficient of identity (1/6 for a==b, 0 otherwise)
+- `c1::Int8`: First generator index (1-8)
+- `coeff1::ComplexF64`: Coefficient of first generator
+- `c2::Int8`: Second generator index (0 if single-term result)
+- `coeff2::ComplexF64`: Coefficient of second generator (0 if c2==0)
+"""
+struct SU3ProductEntry
+    id_coeff::Float64
+    c1::Int8
+    coeff1::ComplexF64
+    c2::Int8
+    coeff2::ComplexF64
+end
+
+# Precomputed constants for SU(3) structure constants
+# These appear frequently: 1/(2√3) = √3/6, √3/4, 1/(4√3) = √3/12
+const _SU3_INV_2SQRT3 = 0.28867513459481287   # 1/(2√3) = √3/6
+const _SU3_SQRT3_4 = 0.4330127018922193       # √3/4
+const _SU3_INV_4SQRT3 = 0.14433756729740643   # 1/(4√3) = √3/12
+const _SU3_ID_COEFF = 0.16666666666666666     # 1/6
+
+# Precomputed 8×8 lookup table for all SU(3) products
+# Generated from structure constants: λ^a λ^b = (1/6)δ_{ab}I + (1/2)(d^{abc} + if^{abc})λ^c
+# Entry format: SU3ProductEntry(id_coeff, c1, coeff1, c2, coeff2)
+const SU3_PRODUCTS = [
+    # Row 1: λ¹ × λʲ
+    SU3ProductEntry(_SU3_ID_COEFF, 8, _SU3_INV_2SQRT3+0im, 0, 0.0+0im)     # (1,1): 1/6 I + (√3/6)λ⁸
+    SU3ProductEntry(0.0, 3, 0.25+0im, 6, 0.25im)                           # (1,2): (1/4)λ³ + (i/4)λ⁶
+    SU3ProductEntry(0.0, 2, 0.25+0im, 5, 0.25im)                           # (1,3): (1/4)λ² + (i/4)λ⁵
+    SU3ProductEntry(0.0, 7, 0.5im, 0, 0.0+0im)                             # (1,4): (i/2)λ⁷
+    SU3ProductEntry(0.0, 3, -0.25im, 6, 0.25+0im)                          # (1,5): (-i/4)λ³ + (1/4)λ⁶
+    SU3ProductEntry(0.0, 2, -0.25im, 5, 0.25+0im)                          # (1,6): (-i/4)λ² + (1/4)λ⁵
+    SU3ProductEntry(0.0, 4, -0.5im, 0, 0.0+0im)                            # (1,7): (-i/2)λ⁴
+    SU3ProductEntry(0.0, 1, _SU3_INV_2SQRT3+0im, 0, 0.0+0im)               # (1,8): (√3/6)λ¹
+    ;; # Row 2: λ² × λʲ
+    SU3ProductEntry(0.0, 3, 0.25+0im, 6, -0.25im)                          # (2,1): (1/4)λ³ + (-i/4)λ⁶
+    SU3ProductEntry(_SU3_ID_COEFF, 7, 0.25+0im, 8, -_SU3_INV_4SQRT3+0im)   # (2,2): 1/6 I + (1/4)λ⁷ + (-√3/12)λ⁸
+    SU3ProductEntry(0.0, 1, 0.25+0im, 4, 0.25im)                           # (2,3): (1/4)λ¹ + (i/4)λ⁴
+    SU3ProductEntry(0.0, 3, -0.25im, 6, -0.25+0im)                         # (2,4): (-i/4)λ³ + (-1/4)λ⁶
+    SU3ProductEntry(0.0, 7, 0.25im, 8, _SU3_SQRT3_4*1im)                   # (2,5): (i/4)λ⁷ + (i√3/4)λ⁸
+    SU3ProductEntry(0.0, 1, 0.25im, 4, -0.25+0im)                          # (2,6): (i/4)λ¹ + (-1/4)λ⁴
+    SU3ProductEntry(0.0, 2, 0.25+0im, 5, -0.25im)                          # (2,7): (1/4)λ² + (-i/4)λ⁵
+    SU3ProductEntry(0.0, 2, -_SU3_INV_4SQRT3+0im, 5, -_SU3_SQRT3_4*1im)    # (2,8): (-√3/12)λ² + (-i√3/4)λ⁵
+    ;; # Row 3: λ³ × λʲ
+    SU3ProductEntry(0.0, 2, 0.25+0im, 5, -0.25im)                          # (3,1): (1/4)λ² + (-i/4)λ⁵
+    SU3ProductEntry(0.0, 1, 0.25+0im, 4, -0.25im)                          # (3,2): (1/4)λ¹ + (-i/4)λ⁴
+    SU3ProductEntry(_SU3_ID_COEFF, 7, -0.25+0im, 8, -_SU3_INV_4SQRT3+0im)  # (3,3): 1/6 I + (-1/4)λ⁷ + (-√3/12)λ⁸
+    SU3ProductEntry(0.0, 2, 0.25im, 5, 0.25+0im)                           # (3,4): (i/4)λ² + (1/4)λ⁵
+    SU3ProductEntry(0.0, 1, 0.25im, 4, 0.25+0im)                           # (3,5): (i/4)λ¹ + (1/4)λ⁴
+    SU3ProductEntry(0.0, 7, -0.25im, 8, _SU3_SQRT3_4*1im)                  # (3,6): (-i/4)λ⁷ + (i√3/4)λ⁸
+    SU3ProductEntry(0.0, 3, -0.25+0im, 6, 0.25im)                          # (3,7): (-1/4)λ³ + (i/4)λ⁶
+    SU3ProductEntry(0.0, 3, -_SU3_INV_4SQRT3+0im, 6, -_SU3_SQRT3_4*1im)    # (3,8): (-√3/12)λ³ + (-i√3/4)λ⁶
+    ;; # Row 4: λ⁴ × λʲ
+    SU3ProductEntry(0.0, 7, -0.5im, 0, 0.0+0im)                            # (4,1): (-i/2)λ⁷
+    SU3ProductEntry(0.0, 3, 0.25im, 6, -0.25+0im)                          # (4,2): (i/4)λ³ + (-1/4)λ⁶
+    SU3ProductEntry(0.0, 2, -0.25im, 5, 0.25+0im)                          # (4,3): (-i/4)λ² + (1/4)λ⁵
+    SU3ProductEntry(_SU3_ID_COEFF, 8, _SU3_INV_2SQRT3+0im, 0, 0.0+0im)     # (4,4): 1/6 I + (√3/6)λ⁸
+    SU3ProductEntry(0.0, 3, 0.25+0im, 6, 0.25im)                           # (4,5): (1/4)λ³ + (i/4)λ⁶
+    SU3ProductEntry(0.0, 2, -0.25+0im, 5, -0.25im)                         # (4,6): (-1/4)λ² + (-i/4)λ⁵
+    SU3ProductEntry(0.0, 1, 0.5im, 0, 0.0+0im)                             # (4,7): (i/2)λ¹
+    SU3ProductEntry(0.0, 4, _SU3_INV_2SQRT3+0im, 0, 0.0+0im)               # (4,8): (√3/6)λ⁴
+    ;; # Row 5: λ⁵ × λʲ
+    SU3ProductEntry(0.0, 3, 0.25im, 6, 0.25+0im)                           # (5,1): (i/4)λ³ + (1/4)λ⁶
+    SU3ProductEntry(0.0, 7, -0.25im, 8, -_SU3_SQRT3_4*1im)                 # (5,2): (-i/4)λ⁷ + (-i√3/4)λ⁸
+    SU3ProductEntry(0.0, 1, -0.25im, 4, 0.25+0im)                          # (5,3): (-i/4)λ¹ + (1/4)λ⁴
+    SU3ProductEntry(0.0, 3, 0.25+0im, 6, -0.25im)                          # (5,4): (1/4)λ³ + (-i/4)λ⁶
+    SU3ProductEntry(_SU3_ID_COEFF, 7, 0.25+0im, 8, -_SU3_INV_4SQRT3+0im)   # (5,5): 1/6 I + (1/4)λ⁷ + (-√3/12)λ⁸
+    SU3ProductEntry(0.0, 1, 0.25+0im, 4, 0.25im)                           # (5,6): (1/4)λ¹ + (i/4)λ⁴
+    SU3ProductEntry(0.0, 2, 0.25im, 5, 0.25+0im)                           # (5,7): (i/4)λ² + (1/4)λ⁵
+    SU3ProductEntry(0.0, 2, _SU3_SQRT3_4*1im, 5, -_SU3_INV_4SQRT3+0im)     # (5,8): (i√3/4)λ² + (-√3/12)λ⁵
+    ;; # Row 6: λ⁶ × λʲ
+    SU3ProductEntry(0.0, 2, 0.25im, 5, 0.25+0im)                           # (6,1): (i/4)λ² + (1/4)λ⁵
+    SU3ProductEntry(0.0, 1, -0.25im, 4, -0.25+0im)                         # (6,2): (-i/4)λ¹ + (-1/4)λ⁴
+    SU3ProductEntry(0.0, 7, 0.25im, 8, -_SU3_SQRT3_4*1im)                  # (6,3): (i/4)λ⁷ + (-i√3/4)λ⁸
+    SU3ProductEntry(0.0, 2, -0.25+0im, 5, 0.25im)                          # (6,4): (-1/4)λ² + (i/4)λ⁵
+    SU3ProductEntry(0.0, 1, 0.25+0im, 4, -0.25im)                          # (6,5): (1/4)λ¹ + (-i/4)λ⁴
+    SU3ProductEntry(_SU3_ID_COEFF, 7, -0.25+0im, 8, -_SU3_INV_4SQRT3+0im)  # (6,6): 1/6 I + (-1/4)λ⁷ + (-√3/12)λ⁸
+    SU3ProductEntry(0.0, 3, -0.25im, 6, -0.25+0im)                         # (6,7): (-i/4)λ³ + (-1/4)λ⁶
+    SU3ProductEntry(0.0, 3, _SU3_SQRT3_4*1im, 6, -_SU3_INV_4SQRT3+0im)     # (6,8): (i√3/4)λ³ + (-√3/12)λ⁶
+    ;; # Row 7: λ⁷ × λʲ
+    SU3ProductEntry(0.0, 4, 0.5im, 0, 0.0+0im)                             # (7,1): (i/2)λ⁴
+    SU3ProductEntry(0.0, 2, 0.25+0im, 5, 0.25im)                           # (7,2): (1/4)λ² + (i/4)λ⁵
+    SU3ProductEntry(0.0, 3, -0.25+0im, 6, -0.25im)                         # (7,3): (-1/4)λ³ + (-i/4)λ⁶
+    SU3ProductEntry(0.0, 1, -0.5im, 0, 0.0+0im)                            # (7,4): (-i/2)λ¹
+    SU3ProductEntry(0.0, 2, -0.25im, 5, 0.25+0im)                          # (7,5): (-i/4)λ² + (1/4)λ⁵
+    SU3ProductEntry(0.0, 3, 0.25im, 6, -0.25+0im)                          # (7,6): (i/4)λ³ + (-1/4)λ⁶
+    SU3ProductEntry(_SU3_ID_COEFF, 8, _SU3_INV_2SQRT3+0im, 0, 0.0+0im)     # (7,7): 1/6 I + (√3/6)λ⁸
+    SU3ProductEntry(0.0, 7, _SU3_INV_2SQRT3+0im, 0, 0.0+0im)               # (7,8): (√3/6)λ⁷
+    ;; # Row 8: λ⁸ × λʲ
+    SU3ProductEntry(0.0, 1, _SU3_INV_2SQRT3+0im, 0, 0.0+0im)               # (8,1): (√3/6)λ¹
+    SU3ProductEntry(0.0, 2, -_SU3_INV_4SQRT3+0im, 5, _SU3_SQRT3_4*1im)     # (8,2): (-√3/12)λ² + (i√3/4)λ⁵
+    SU3ProductEntry(0.0, 3, -_SU3_INV_4SQRT3+0im, 6, _SU3_SQRT3_4*1im)     # (8,3): (-√3/12)λ³ + (i√3/4)λ⁶
+    SU3ProductEntry(0.0, 4, _SU3_INV_2SQRT3+0im, 0, 0.0+0im)               # (8,4): (√3/6)λ⁴
+    SU3ProductEntry(0.0, 2, -_SU3_SQRT3_4*1im, 5, -_SU3_INV_4SQRT3+0im)    # (8,5): (-i√3/4)λ² + (-√3/12)λ⁵
+    SU3ProductEntry(0.0, 3, -_SU3_SQRT3_4*1im, 6, -_SU3_INV_4SQRT3+0im)    # (8,6): (-i√3/4)λ³ + (-√3/12)λ⁶
+    SU3ProductEntry(0.0, 7, _SU3_INV_2SQRT3+0im, 0, 0.0+0im)               # (8,7): (√3/6)λ⁷
+    SU3ProductEntry(_SU3_ID_COEFF, 8, -_SU3_INV_2SQRT3+0im, 0, 0.0+0im)    # (8,8): 1/6 I + (-√3/6)λ⁸
+]
+
+"""
+    su3_product_lookup(a::Int, b::Int) -> SU3ProductEntry
+
+Fast O(1) lookup for SU(3) product λ^a λ^b.
+Returns precomputed entry with identity coefficient and up to 2 generator terms.
+
+Note: The lookup table is stored in column-major order (Julia default), 
+so we access [b, a] to get the entry for λ^a × λ^b.
+"""
+@inline function su3_product_lookup(a::Int, b::Int)
+    @inbounds SU3_PRODUCTS[b, a]
+end
+
 """
     pauli_to_gen_index(pauli::Symbol)
 
