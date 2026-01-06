@@ -589,4 +589,7 @@ end
         rhs = -1im*corr(∑(:k, Pr"g_j,k"*σx(:k)*a(:i) + Pr"g_i,k"*σx(:k)*a(:j)) + (Pr"ω_i"+Pr"ω_j")*a(:i)a(:j))
         @test EQ.eqs[lhs] == normal_form(rhs)
     end
+
+    # Symbolic sums and products tests are in a separate file
+    include("test_symbolic_sums.jl")
 end
