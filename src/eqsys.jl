@@ -21,34 +21,37 @@ function corrheis(ops::BaseOpProduct,H::QuExpr,Ls=())::QuExpr
 end
 
 const _CORRHEISDICT = Dict()
+const _CORRHEISDICT_LOCK = ReentrantLock()
 function _corrheis_cached(ops::BaseOpProduct,H::QuExpr,Ls)::QuExpr
     # if haskey(_CORRHEISDICT,(ops,H,Ls))
     #     println("found operator '$ops' in _CORRHEISDICT")
     # else
     #     println("did not find operator '$ops' in _CORRHEISDICT")
     # end
-    get!(_CORRHEISDICT,(ops,H,Ls)) do
-        # original right-hand side
-        A = QuExpr(QuTerm(ops))
-        dA = normal_form(heisenberg_eom(A,H,Ls))
-        cdA = expval_as_corrs(dA)
+    lock(_CORRHEISDICT_LOCK) do
+        get!(_CORRHEISDICT,(ops,H,Ls)) do
+            # original right-hand side
+            A = QuExpr(QuTerm(ops))
+            dA = normal_form(heisenberg_eom(A,H,Ls))
+            cdA = expval_as_corrs(dA)
 
-        # terms from left-hand side, i.e., -d_t δ<A>
-        δcA = corr(A) - expval_as_corrs(A)
-        for (t,s) in δcA.terms
-            # there should be no more "bare" operators in these expressions
-            @assert isempty(t.bares) && isempty(t.expvals)
-            for ii = 1:length(t.corrs)
-                tn = deepcopy(t)
-                O = tn.corrs[ii]
-                deleteat!(tn.corrs,ii)
-                tt = normal_form(QuExpr((tn=>s,))*corrheis(O,H,Ls))
-                for (t2,s2) in tt.terms
-                    _add_sum_term!(cdA,t2,s2)
+            # terms from left-hand side, i.e., -d_t δ<A>
+            δcA = corr(A) - expval_as_corrs(A)
+            for (t,s) in δcA.terms
+                # there should be no more "bare" operators in these expressions
+                @assert isempty(t.bares) && isempty(t.expvals)
+                for ii = 1:length(t.corrs)
+                    tn = deepcopy(t)
+                    O = tn.corrs[ii]
+                    deleteat!(tn.corrs,ii)
+                    tt = normal_form(QuExpr((tn=>s,))*corrheis(O,H,Ls))
+                    for (t2,s2) in tt.terms
+                        _add_sum_term!(cdA,t2,s2)
+                    end
                 end
             end
+            cdA
         end
-        cdA
     end
 end
 

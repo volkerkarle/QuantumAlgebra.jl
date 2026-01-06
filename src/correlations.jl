@@ -118,16 +118,19 @@ QuantumAlgebra package. This allows to directly return a normal-ordered form.
 """
 function expval2corrs_inds(N::Int)
     # get return value for N from cache if present, otherwise calculate and cache it
-    get!(_EXPVAL2CORRS_CACHE,N) do
-        terms = Any[Tuple(tuple.(1:N))]
-        for n = 2:N-1
-            append!(terms,ncomb_inds(n,1:N))
+    lock(_EXPVAL2CORRS_CACHE_LOCK) do
+        get!(_EXPVAL2CORRS_CACHE,N) do
+            terms = Any[Tuple(tuple.(1:N))]
+            for n = 2:N-1
+                append!(terms,ncomb_inds(n,1:N))
+            end
+            Any[(tuple(1:N...),),sort!(terms,lt=CorrPerm_isless)...]
         end
-        Any[(tuple(1:N...),),sort!(terms,lt=CorrPerm_isless)...]
     end
 end
 # preload the cache for N=0 and N=1 so we do not have to special-case those above
 const _EXPVAL2CORRS_CACHE = Dict{Int,Vector{Any}}(0 => [((),)], 1 => [((1,),)])
+const _EXPVAL2CORRS_CACHE_LOCK = ReentrantLock()
 
 function ncomb_inds(n,inds,used_combs=Set())
     terms = []
@@ -162,26 +165,29 @@ end
 _canon_op_to_num(A::BaseOperator) = _canon_ind_to_num(only(assignedinds(A.inds)))
 _expval2tuple(A::ExpVal) = Tuple(_canon_op_to_num.(A.ops.v))
 const _CORR2EXPVALS_CACHE = Dict{Int,Vector{Any}}()
+const _CORR2EXPVALS_CACHE_LOCK = ReentrantLock()
 function corr2expvals_inds(N)
-    get!(_CORR2EXPVALS_CACHE,N) do
-        A = QuExpr(QuTerm(BaseOpProduct(BosonDestroy.(:a,_canon_ind.(1:N)))))
-        # expval_as_corrs(As...) = <As...> in terms of correlators <A1 A2...>c
-        # <As...>c = <As...> - <As...> + <As...>c, where RHS expression only contains <As...> and lower-order correlators
-        cA = expval(A) - expval_as_corrs(A) + corr(A)
-        # rewrite the lower-order correlators in terms of expectation values
-        ncA = QuExpr()
-        for (t,s) in cA.terms
-            nt = noaliascopy(t)
-            empty!(nt.corrs)
-            nts = QuExpr(nt)
-            for co in t.corrs
-                nts *= QuExpr((term2expvals(QuTerm(co.ops),C)=>sC for (C,sC) in corr2expvals_inds(length(co))))
+    lock(_CORR2EXPVALS_CACHE_LOCK) do
+        get!(_CORR2EXPVALS_CACHE,N) do
+            A = QuExpr(QuTerm(BaseOpProduct(BosonDestroy.(:a,_canon_ind.(1:N)))))
+            # expval_as_corrs(As...) = <As...> in terms of correlators <A1 A2...>c
+            # <As...>c = <As...> - <As...> + <As...>c, where RHS expression only contains <As...> and lower-order correlators
+            cA = expval(A) - expval_as_corrs(A) + corr(A)
+            # rewrite the lower-order correlators in terms of expectation values
+            ncA = QuExpr()
+            for (t,s) in cA.terms
+                nt = noaliascopy(t)
+                empty!(nt.corrs)
+                nts = QuExpr(nt)
+                for co in t.corrs
+                    nts *= QuExpr((term2expvals(QuTerm(co.ops),C)=>sC for (C,sC) in corr2expvals_inds(length(co))))
+                end
+                for (ntt,ns) in nts.terms
+                    _add_with_normal_order!(ncA,ntt,ns*s)
+                end
             end
-            for (ntt,ns) in nts.terms
-                _add_with_normal_order!(ncA,ntt,ns*s)
-            end
+            [Tuple(_expval2tuple.(t.expvals))=>s for (t,s) in sort!(collect(ncA.terms),by=x->x[1])]
         end
-        [Tuple(_expval2tuple.(t.expvals))=>s for (t,s) in sort!(collect(ncA.terms),by=x->x[1])]
     end
 end
 

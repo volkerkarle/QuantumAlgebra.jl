@@ -165,19 +165,24 @@ make_indices(inds::Union{Vector,Tuple}) = make_indices(inds...)
 
 const _NameTable = Dict{Symbol,IndexInt}()
 const _NameTableInv = Symbol[]
+const _NAME_TABLE_LOCK = ReentrantLock()
 
 @concrete struct QuOpName
     i::IndexInt
     function QuOpName(name::Symbol)
-        i = get!(_NameTable,name) do
-            push!(_NameTableInv,name)
-            length(_NameTableInv)
+        i = lock(_NAME_TABLE_LOCK) do
+            get!(_NameTable,name) do
+                push!(_NameTableInv,name)
+                length(_NameTableInv)
+            end
         end
         new(i)
     end
     QuOpName(name::QuOpName) = name
 end
-sym(ind::QuOpName) = _NameTableInv[ind.i]
+sym(ind::QuOpName) = lock(_NAME_TABLE_LOCK) do
+    _NameTableInv[ind.i]
+end
 Base.print(io::IO, ind::QuOpName) = print(io, sym(ind))
 Base.isless(i1::QuOpName,i2::QuOpName) = isless(sym(i1),sym(i2))
 const NoName = QuOpName(Symbol())

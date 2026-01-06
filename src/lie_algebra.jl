@@ -271,6 +271,7 @@ struct AlgebraRegistry
 end
 
 const ALGEBRA_REGISTRY = AlgebraRegistry(AbstractLieAlgebra[], Dict{Tuple{Symbol, Int}, UInt16}())
+const _ALGEBRA_REGISTRY_LOCK = ReentrantLock()
 
 """
     register_algebra!(alg::AbstractLieAlgebra, type_sym::Symbol)
@@ -282,14 +283,16 @@ function register_algebra!(alg::AbstractLieAlgebra, type_sym::Symbol)
     dim = algebra_dim(alg)
     key = (type_sym, dim)
     
-    if haskey(ALGEBRA_REGISTRY.type_dim_to_id, key)
-        return ALGEBRA_REGISTRY.type_dim_to_id[key]
+    lock(_ALGEBRA_REGISTRY_LOCK) do
+        if haskey(ALGEBRA_REGISTRY.type_dim_to_id, key)
+            return ALGEBRA_REGISTRY.type_dim_to_id[key]
+        end
+        
+        push!(ALGEBRA_REGISTRY.algebras, alg)
+        id = UInt16(length(ALGEBRA_REGISTRY.algebras))
+        ALGEBRA_REGISTRY.type_dim_to_id[key] = id
+        id
     end
-    
-    push!(ALGEBRA_REGISTRY.algebras, alg)
-    id = UInt16(length(ALGEBRA_REGISTRY.algebras))
-    ALGEBRA_REGISTRY.type_dim_to_id[key] = id
-    id
 end
 
 """
@@ -299,31 +302,56 @@ Retrieve an algebra from the registry by its ID.
 """
 function get_algebra(id::UInt16)
     id == 0 && throw(ArgumentError("Algebra ID 0 is reserved for non-Lie-algebra operators"))
-    1 <= id <= length(ALGEBRA_REGISTRY.algebras) || throw(ArgumentError("Invalid algebra ID: $id"))
-    ALGEBRA_REGISTRY.algebras[id]
+    lock(_ALGEBRA_REGISTRY_LOCK) do
+        1 <= id <= length(ALGEBRA_REGISTRY.algebras) || throw(ArgumentError("Invalid algebra ID: $id"))
+        ALGEBRA_REGISTRY.algebras[id]
+    end
 end
 
 """
     get_or_create_su(N::Int)
 
 Get or create an SU(N) algebra and return its registry ID.
+Uses double-checked locking to avoid holding the lock during expensive algebra construction.
 """
 function get_or_create_su(N::Int)
     key = (:SU, N)
-    if haskey(ALGEBRA_REGISTRY.type_dim_to_id, key)
-        return ALGEBRA_REGISTRY.type_dim_to_id[key]
+    
+    # Fast path: check if already exists under lock (required for safe read)
+    existing_id = lock(_ALGEBRA_REGISTRY_LOCK) do
+        get(ALGEBRA_REGISTRY.type_dim_to_id, key, nothing)
     end
+    existing_id !== nothing && return existing_id
+    
+    # Slow path: create algebra OUTSIDE lock (expensive computation)
+    # This allows other threads to access existing algebras while we compute
     alg = SUAlgebra{N}()
-    register_algebra!(alg, :SU)
+    
+    # Now acquire lock to insert (with re-check in case another thread beat us)
+    lock(_ALGEBRA_REGISTRY_LOCK) do
+        # Re-check: another thread may have created it while we were computing
+        if haskey(ALGEBRA_REGISTRY.type_dim_to_id, key)
+            return ALGEBRA_REGISTRY.type_dim_to_id[key]
+        end
+        # We won the race, insert our algebra
+        push!(ALGEBRA_REGISTRY.algebras, alg)
+        id = UInt16(length(ALGEBRA_REGISTRY.algebras))
+        ALGEBRA_REGISTRY.type_dim_to_id[key] = id
+        id
+    end
 end
 
 # Pre-register SU(2) with ID 1 for backwards compatibility with TLS
 function __init_algebra_registry__()
-    # Clear registry (in case of re-initialization)
-    empty!(ALGEBRA_REGISTRY.algebras)
-    empty!(ALGEBRA_REGISTRY.type_dim_to_id)
-    # Register SU(2) as ID 1
-    get_or_create_su(2)
+    lock(_ALGEBRA_REGISTRY_LOCK) do
+        # Clear registry (in case of re-initialization)
+        empty!(ALGEBRA_REGISTRY.algebras)
+        empty!(ALGEBRA_REGISTRY.type_dim_to_id)
+        # Register SU(2) as ID 1 (inline to avoid double-lock)
+        alg = SUAlgebra{2}()
+        push!(ALGEBRA_REGISTRY.algebras, alg)
+        ALGEBRA_REGISTRY.type_dim_to_id[(:SU, 2)] = UInt16(1)
+    end
 end
 
 # ============================================================================
