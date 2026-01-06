@@ -1,5 +1,6 @@
 # Comprehensive tests for SU(N) Lie algebra functionality
 # Tests: algebra structure, generators, commutation, products, conversions, vacuum expectations, ladder operators
+# Uses parallelization for expensive tests when multiple threads are available
 
 using Test
 using QuantumAlgebra
@@ -7,6 +8,7 @@ using QuantumAlgebra: get_algebra, get_or_create_su, structure_constants, symmet
                       gellmann_matrix, algebra_dim, num_generators, identity_coefficient,
                       product_coefficients, commutator_coefficients, δ, QuExpr, QuTerm, BaseOpProduct, QuIndex
 using LinearAlgebra: tr, I
+using Base.Threads: @threads, nthreads
 
 # Helper function for delta symbols (same as in runtests.jl)
 function myδ_local(i, j)
@@ -111,31 +113,41 @@ end
         end
 
         @testset "Orthonormality Tr(TᵃTᵇ) = δₐᵦ/2" begin
-            for N in [2, 3, 4]
+            for N in [2, 3, 4, 5]  # Extended to include N=5
                 ngen = N^2 - 1
-                for a in 1:ngen, b in 1:ngen
+                # Parallelize: collect all (a,b) pairs and test in parallel
+                pairs = [(a, b) for a in 1:ngen for b in 1:ngen]
+                results = Vector{Bool}(undef, length(pairs))
+                @threads for idx in eachindex(pairs)
+                    a, b = pairs[idx]
                     Ta, Tb = gellmann_matrix(N, a), gellmann_matrix(N, b)
                     expected = a == b ? 0.5 : 0.0
-                    @test isapprox(real(tr(Ta * Tb)), expected, atol=1e-12)
+                    results[idx] = isapprox(real(tr(Ta * Tb)), expected, atol=1e-12)
                 end
+                @test all(results)
             end
         end
 
         @testset "Matrix algebra verification" begin
             # Verify [Tᵃ, Tᵇ] = i f^{abc} Tᶜ holds at matrix level
-            for N in [2, 3]
+            for N in [2, 3, 4, 5]  # Extended to include N=4,5
                 ngen = N^2 - 1
                 alg = get_algebra(get_or_create_su(N))
                 generators = [gellmann_matrix(N, k) for k in 1:ngen]
                 
-                for a in 1:ngen, b in 1:ngen
+                # Parallelize over all (a,b) pairs
+                pairs = [(a, b) for a in 1:ngen for b in 1:ngen]
+                results = Vector{Bool}(undef, length(pairs))
+                @threads for idx in eachindex(pairs)
+                    a, b = pairs[idx]
                     comm_matrix = generators[a] * generators[b] - generators[b] * generators[a]
                     reconstructed = zeros(ComplexF64, N, N)
                     for (c, f_abc) in structure_constants(alg, a, b)
                         reconstructed += im * f_abc * generators[c]
                     end
-                    @test isapprox(comm_matrix, reconstructed, atol=1e-10)
+                    results[idx] = isapprox(comm_matrix, reconstructed, atol=1e-10)
                 end
+                @test all(results)
             end
         end
     end
@@ -225,15 +237,21 @@ end
         @testset "SU(4) commutators" begin
             G = su_generators(4, :G)
             
-            # Self-commutation is zero
-            for a in 1:15
-                @test iszero(normal_form(comm(G[a], G[a])))
+            # Self-commutation is zero (parallelized)
+            results_self = Vector{Bool}(undef, 15)
+            @threads for a in 1:15
+                results_self[a] = iszero(normal_form(comm(G[a], G[a])))
             end
+            @test all(results_self)
             
-            # Antisymmetry
-            for a in 1:5, b in a+1:5
-                @test normal_form(comm(G[a], G[b])) == -normal_form(comm(G[b], G[a]))
+            # Antisymmetry - full coverage of all 105 pairs (parallelized)
+            pairs = [(a, b) for a in 1:15 for b in a+1:15]
+            results_anti = Vector{Bool}(undef, length(pairs))
+            @threads for idx in eachindex(pairs)
+                a, b = pairs[idx]
+                results_anti[idx] = normal_form(comm(G[a], G[b])) == -normal_form(comm(G[b], G[a]))
             end
+            @test all(results_anti)
             
             # Jacobi identity for SU(4)
             jacobi = comm(G[1], comm(G[2], G[3])) + 
@@ -245,15 +263,21 @@ end
         @testset "SU(5) commutators" begin
             G = su_generators(5, :G)
             
-            # Self-commutation is zero
-            for a in 1:24
-                @test iszero(normal_form(comm(G[a], G[a])))
+            # Self-commutation is zero (parallelized)
+            results_self = Vector{Bool}(undef, 24)
+            @threads for a in 1:24
+                results_self[a] = iszero(normal_form(comm(G[a], G[a])))
             end
+            @test all(results_self)
             
-            # Antisymmetry (subset)
-            for a in 1:5, b in a+1:5
-                @test normal_form(comm(G[a], G[b])) == -normal_form(comm(G[b], G[a]))
+            # Antisymmetry - full coverage of all 276 pairs (parallelized)
+            pairs = [(a, b) for a in 1:24 for b in a+1:24]
+            results_anti = Vector{Bool}(undef, length(pairs))
+            @threads for idx in eachindex(pairs)
+                a, b = pairs[idx]
+                results_anti[idx] = normal_form(comm(G[a], G[b])) == -normal_form(comm(G[b], G[a]))
             end
+            @test all(results_anti)
             
             # Jacobi identity for SU(5)
             jacobi = comm(G[1], comm(G[2], G[3])) + 
@@ -321,11 +345,15 @@ end
         @testset "SU(4) products" begin
             G = su_generators(4, :G)
             
-            # All 225 products should work without error
-            for a in 1:15, b in 1:15
+            # All 225 products should work without error (parallelized)
+            pairs = [(a, b) for a in 1:15 for b in 1:15]
+            results = Vector{Bool}(undef, length(pairs))
+            @threads for idx in eachindex(pairs)
+                a, b = pairs[idx]
                 result = normal_form(G[a] * G[b])
-                @test result isa QuExpr
+                results[idx] = result isa QuExpr
             end
+            @test all(results)
             
             # Product minus reverse equals commutator
             result12 = normal_form(G[1] * G[2])
@@ -336,11 +364,15 @@ end
         @testset "SU(5) products" begin
             G = su_generators(5, :G)
             
-            # Test a subset of the 576 products
-            for a in 1:10, b in 1:10
+            # Full coverage: all 576 products (parallelized)
+            pairs = [(a, b) for a in 1:24 for b in 1:24]
+            results = Vector{Bool}(undef, length(pairs))
+            @threads for idx in eachindex(pairs)
+                a, b = pairs[idx]
                 result = normal_form(G[a] * G[b])
-                @test result isa QuExpr
+                results[idx] = result isa QuExpr
             end
+            @test all(results)
             
             # Product minus reverse equals commutator
             result12 = normal_form(G[1] * G[2])
