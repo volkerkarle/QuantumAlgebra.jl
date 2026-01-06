@@ -884,63 +884,79 @@ end
 # Display
 # ============================================================================
 
-function Base.show(io::IO, s::SymSum)
-    # Canonicalize for display
-    s_display = canonicalize_indices(s)
-    
+# Internal helper to display a SymSum without re-canonicalizing
+# (used for nested sums after top-level canonicalization)
+function _show_symsum_raw(io::IO, s::SymSum)
     print(io, "Σ")
-    print(io, s_display.index)
-    if !isempty(s_display.excluded)
+    print(io, s.index)
+    if !isempty(s.excluded)
         print(io, "≠")
-        join(io, s_display.excluded, ",")
+        join(io, s.excluded, ",")
     end
     print(io, "(")
-    show(io, s_display.expr)
+    _show_agg_raw(io, s.expr)
     print(io, ")")
+end
+
+function _show_symprod_raw(io::IO, s::SymProd)
+    print(io, "Π")
+    print(io, s.index)
+    if !isempty(s.excluded)
+        print(io, "≠")
+        join(io, s.excluded, ",")
+    end
+    print(io, "(")
+    _show_agg_raw(io, s.expr)
+    print(io, ")")
+end
+
+# Generic dispatcher for raw display
+_show_agg_raw(io::IO, s::SymSum) = _show_symsum_raw(io, s)
+_show_agg_raw(io::IO, s::SymProd) = _show_symprod_raw(io, s)
+_show_agg_raw(io::IO, e::QuExpr) = show(io, e)
+
+function Base.show(io::IO, s::SymSum)
+    # Canonicalize for display - only at top level
+    s_display = canonicalize_indices(s)
+    _show_symsum_raw(io, s_display)
 end
 
 function Base.show(io::IO, s::SymProd)
     s_display = canonicalize_indices(s)
-    
-    print(io, "Π")
-    print(io, s_display.index)
-    if !isempty(s_display.excluded)
-        print(io, "≠")
-        join(io, s_display.excluded, ",")
-    end
-    print(io, "(")
-    show(io, s_display.expr)
-    print(io, ")")
+    _show_symprod_raw(io, s_display)
 end
 
 function Base.show(io::IO, e::SymExpr)
     first = true
     
     for (c, agg) in e.terms
+        # Canonicalize each term for display
+        agg_display = canonicalize_indices(agg)
+        
         if first
             if c == 1
-                show(io, agg)
+                _show_agg_raw(io, agg_display)
             elseif c == -1
                 print(io, "-")
-                show(io, agg)
+                _show_agg_raw(io, agg_display)
             else
                 print(io, c, "*")
-                show(io, agg)
+                _show_agg_raw(io, agg_display)
             end
             first = false
         else
             if c == 1
                 print(io, " + ")
-                show(io, agg)
+                _show_agg_raw(io, agg_display)
             elseif c == -1
                 print(io, " - ")
-                show(io, agg)
+                _show_agg_raw(io, agg_display)
             elseif real(c) < 0
                 print(io, " - ", -c, "*")
-                show(io, agg)
+                _show_agg_raw(io, agg_display)
             else
                 print(io, " + ", c, "*")
-                show(io, agg)
+                _show_agg_raw(io, agg_display)
             end
         end
     end
@@ -961,41 +977,56 @@ end
 # LaTeX Output
 # ============================================================================
 
-function latex(s::SymSum)
-    s_display = canonicalize_indices(s)
-    idx_str = latex(s_display.index)
+# Internal helper for latex without re-canonicalizing (for nested sums)
+function _latex_symsum_raw(s::SymSum)
+    idx_str = latex(s.index)
     
     excl_str = ""
-    if !isempty(s_display.excluded)
-        excl_strs = [latex(e) for e in s_display.excluded]
+    if !isempty(s.excluded)
+        excl_strs = [latex(e) for e in s.excluded]
         excl_str = "_{\\neq " * join(excl_strs, ",") * "}"
     end
     
-    expr_str = latex(s_display.expr)
+    expr_str = _latex_agg_raw(s.expr)
     
     "\\sum_{$idx_str$excl_str} $expr_str"
 end
 
-function latex(s::SymProd)
-    s_display = canonicalize_indices(s)
-    idx_str = latex(s_display.index)
+function _latex_symprod_raw(s::SymProd)
+    idx_str = latex(s.index)
     
     excl_str = ""
-    if !isempty(s_display.excluded)
-        excl_strs = [latex(e) for e in s_display.excluded]
+    if !isempty(s.excluded)
+        excl_strs = [latex(e) for e in s.excluded]
         excl_str = "_{\\neq " * join(excl_strs, ",") * "}"
     end
     
-    expr_str = latex(s_display.expr)
+    expr_str = _latex_agg_raw(s.expr)
     
     "\\prod_{$idx_str$excl_str} $expr_str"
+end
+
+# Generic dispatcher for raw latex
+_latex_agg_raw(s::SymSum) = _latex_symsum_raw(s)
+_latex_agg_raw(s::SymProd) = _latex_symprod_raw(s)
+_latex_agg_raw(e::QuExpr) = latex(e)
+
+function latex(s::SymSum)
+    s_display = canonicalize_indices(s)
+    _latex_symsum_raw(s_display)
+end
+
+function latex(s::SymProd)
+    s_display = canonicalize_indices(s)
+    _latex_symprod_raw(s_display)
 end
 
 function latex(e::SymExpr)
     parts = String[]
     
     for (i, (c, agg)) in enumerate(e.terms)
-        agg_latex = latex(agg)
+        agg_display = canonicalize_indices(agg)
+        agg_latex = _latex_agg_raw(agg_display)
         if i == 1
             if c == 1
                 push!(parts, agg_latex)
