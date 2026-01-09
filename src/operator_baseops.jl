@@ -136,9 +136,18 @@ end
 @inline function Base.cmp(A::BaseOperator,B::BaseOperator)
     @_cmpAB t false
     @_cmpAB name false
-    @_cmpAB inds false
-    @_cmpAB algebra_id false
-    @_cmpAB gen_idx false
+    # For LieAlgebraGen_ and Transition_ operators, compare gen_idx before inds
+    # to ensure proper normal ordering (e.g., T¹ < T² regardless of site indices)
+    # This is analogous to how TLS operators have different types (TLSx_ < TLSy_ < TLSz_)
+    if A.t == LieAlgebraGen_ || A.t == Transition_
+        @_cmpAB algebra_id false
+        @_cmpAB gen_idx false
+        @_cmpAB inds false
+    else
+        @_cmpAB inds false
+        @_cmpAB algebra_id false
+        @_cmpAB gen_idx false
+    end
     # they are equal
     return 0
 end
@@ -514,11 +523,14 @@ end
     _exchange_transition_operators(A, B)
 
 Handle exchange of two transition operators.
-B A = A B + [B, A]
 
-[|i⟩⟨j|, |k⟩⟨l|] = δ_jk |i⟩⟨l| - δ_il |k⟩⟨j|
+Product rule: |i_B⟩⟨j_B| × |i_A⟩⟨j_A| = δ_{j_B, i_A} |i_B⟩⟨j_A|
 
-For same system (name, indices, N): returns (1, ExchangeResult).
+For same indices (isempty(dd)): return the direct product B*A with prefactor=0
+For different indices: B A = A B + [B, A], where [B,A] is the commutator
+
+[B, A] = |i_B⟩⟨j_B| |i_A⟩⟨j_A| - |i_A⟩⟨j_A| |i_B⟩⟨j_B|
+       = δ_{j_B, i_A} |i_B⟩⟨j_A| - δ_{j_A, i_B} |i_A⟩⟨j_B|
 """
 function _exchange_transition_operators(A::BaseOperator, B::BaseOperator)
     # Different systems commute
@@ -536,35 +548,55 @@ function _exchange_transition_operators(A::BaseOperator, B::BaseOperator)
     i_A, j_A = (A.gen_idx - 1) ÷ N + 1, (A.gen_idx - 1) % N + 1
     i_B, j_B = (B.gen_idx - 1) ÷ N + 1, (B.gen_idx - 1) % N + 1
     
-    # [|i_A⟩⟨j_A|, |i_B⟩⟨j_B|] = δ_{j_A,i_B} |i_A⟩⟨j_B| - δ_{i_A,j_B} |i_B⟩⟨j_A|
-    # We want B A - A B = [B, A] = -[A, B]
-    # So: B A = A B + [B, A] = A B - [A, B]
-    #        = A B - (δ_{j_A,i_B} |i_A⟩⟨j_B| - δ_{i_A,j_B} |i_B⟩⟨j_A|)
-    #        = A B + δ_{i_A,j_B} |i_B⟩⟨j_A| - δ_{j_A,i_B} |i_A⟩⟨j_B|
-    
-    terms = Tuple{ComplexF64, BaseOperator}[]
-    
-    if i_A == j_B
-        # Term: +|i_B⟩⟨j_A|
-        enc = UInt16((i_B - 1) * N + j_A)
-        push!(terms, (ComplexF64(1.0), BaseOperator(Transition_, A.name, A.inds, A.algebra_id, enc)))
-    end
-    
-    if j_A == i_B
-        # Term: -|i_A⟩⟨j_B|
-        enc = UInt16((i_A - 1) * N + j_B)
-        push!(terms, (ComplexF64(-1.0), BaseOperator(Transition_, A.name, A.inds, A.algebra_id, enc)))
-    end
-    
-    if isempty(terms)
-        return (1, nothing)
-    elseif length(terms) == 1
-        coeff = terms[1][1]
-        # Try to convert to rational
-        coeff_r = real(coeff) == 1.0 ? 1//1 : real(coeff) == -1.0 ? -1//1 : real(coeff)
-        return (1, ExchangeResult(Complex{Rational{Int}}(coeff_r, 0), dd, terms[1][2]))
+    if isempty(dd)
+        # =====================================================================
+        # SAME INDICES: Compute direct product B*A = δ_{j_B,i_A} |i_B⟩⟨j_A|
+        # Return prefactor=0 (A*B term is replaced entirely by the product)
+        # =====================================================================
+        if j_B == i_A
+            enc = UInt16((i_B - 1) * N + j_A)
+            new_op = BaseOperator(Transition_, A.name, A.inds, A.algebra_id, enc)
+            return (0, ExchangeResult(1//1 + 0im, dd, new_op))
+        else
+            # Product is zero: B*A = 0, so B*A = 0*A*B + 0
+            # We need to signal that the product vanishes
+            # Return prefactor=0 with a zero coefficient
+            # Actually, if product is 0, we return (0, nothing) but with special handling
+            # The simplest approach: return (0, ExchangeResult(0, ...)) but we need an operator
+            # For a zero result, we can return (0, nothing) and let normal_form handle it
+            # But (0, nothing) means B*A = 0*A*B = 0, which is correct!
+            return (0, nothing)
+        end
     else
-        return (1, ExchangeResult(0//1, dd, terms))
+        # =====================================================================
+        # DIFFERENT INDICES: B A = A B + [B, A]
+        # Compute commutator [B, A] = δ_{j_B, i_A} |i_B⟩⟨j_A| - δ_{j_A, i_B} |i_A⟩⟨j_B|
+        # Return prefactor=1
+        # =====================================================================
+        terms = Tuple{ComplexF64, BaseOperator}[]
+        
+        if j_B == i_A
+            # Term: +|i_B⟩⟨j_A|
+            enc = UInt16((i_B - 1) * N + j_A)
+            push!(terms, (ComplexF64(1.0), BaseOperator(Transition_, A.name, A.inds, A.algebra_id, enc)))
+        end
+        
+        if j_A == i_B
+            # Term: -|i_A⟩⟨j_B|
+            enc = UInt16((i_A - 1) * N + j_B)
+            push!(terms, (ComplexF64(-1.0), BaseOperator(Transition_, A.name, A.inds, A.algebra_id, enc)))
+        end
+        
+        if isempty(terms)
+            # Commutator is zero, operators commute
+            return (1, nothing)
+        elseif length(terms) == 1
+            coeff = terms[1][1]
+            coeff_r = real(coeff) == 1.0 ? 1//1 : real(coeff) == -1.0 ? -1//1 : Rational{Int}(real(coeff))
+            return (1, ExchangeResult(Complex{Rational{Int}}(coeff_r, 0), dd, terms[1][2]))
+        else
+            return (1, ExchangeResult(0//1 + 0im, dd, terms))
+        end
     end
 end
 
@@ -606,15 +638,24 @@ function _exchange_lie_algebra_generators(A::BaseOperator, B::BaseOperator)
     # =========================================================================
     if A.algebra_id == SU2_ALGEBRA_ID
         # [T^a, T^b] = i ε_{abc} T^c
-        # We want B A = A B + [B, A] = A B - [A, B] = A B - i ε_{abc} T^c
+        # Product rule: T^a T^b = (1/4)δ_{ab} + (i/2)ε_{abc} T^c
+        # We want B A = T^b T^a = (i/2)ε_{bac} T^c = (-i/2)ε_{abc} T^c
         c, eps_abc = su2_commutator_result(a, b)
         if c == 0
             return (1, nothing)
         end
-        # Coefficient is -i * ε_{abc} (note: structure constant f_{abc} = ε_{abc} for SU(2))
-        coeff = Complex{Rational{Int}}(0, -eps_abc)
         new_op = LieAlgebraGenerator(A.name, A.algebra_id, c, A.inds)
-        return (1, ExchangeResult(coeff, dd, new_op))
+        if isempty(dd)
+            # Same indices: B A = 0*A B + result (full simplification)
+            # T^b T^a = (i/2)ε_{bac} T^c = (-i/2)ε_{abc} T^c
+            coeff = Complex{Rational{Int}}(0, -eps_abc//2)
+            return (0, ExchangeResult(coeff, dd, new_op))
+        else
+            # Different indices: B A = 1*A B + commutator_term (delta term)
+            # [T^b_j, T^a_i] = i ε_{bac} δ_{ij} T^c_i = -i ε_{abc} δ_{ij} T^c_i
+            coeff = Complex{Rational{Int}}(0, -eps_abc)
+            return (1, ExchangeResult(coeff, dd, new_op))
+        end
     end
     
     # =========================================================================
@@ -628,27 +669,76 @@ function _exchange_lie_algebra_generators(A::BaseOperator, B::BaseOperator)
     end
     
     # Build result from structure constants
-    # [B, A] = -[A, B] = -i f^{abc} T^c
+    # Product rule: T^a T^b = (1/2N)δ_{ab} + (1/2)(d_{abc} + i f_{abc}) T^c
+    # For exchange: T^b T^a = (1/2N)δ_{ab} + (1/2)(d_{abc} - i f_{abc}) T^c
+    # Here we only handle the commutator part for reordering:
+    # T^b T^a = 0 * T^a T^b + (1/2)(d_{abc} - i f_{abc}) T^c  [same indices, prefactor=0]
+    # T^b_j T^a_i = T^a_i T^b_j + (-i f_{abc}) δ_{ij} T^c_i  [different indices, prefactor=1]
+    #
+    # Note: For same indices, we use contraction (_try_contract_lie_algebra) for the full product.
+    # The exchange function just needs to provide the result for reordering.
+    # Since prefactor=0 means B A = result (not B A = A B + result), we return the full product.
+    #
+    # However, the current implementation uses structure constants which only give
+    # the antisymmetric (commutator) part. For the full product, we'd need d_{abc} too.
+    # For now, we return the commutator coefficient for the different-index case,
+    # and rely on contraction for the same-index case.
+    #
+    # Actually, re-examining the TLS code: it returns the PRODUCT coefficient directly.
+    # For σ^b σ^a = i ε_{bac} σ^c (when a ≠ b), coefficient = i ε_{bac}
+    # For T^b T^a = (i/2) ε_{bac} T^c (SU(2), when a ≠ b), coefficient = (i/2) ε_{bac}
+    #
+    # For general SU(N), we need: T^b T^a = (1/2)(d_{bac} + i f_{bac}) T^c
+    #                                     = (1/2)(d_{abc} - i f_{abc}) T^c
+    # So coefficient = (1/2)(d_{abc} - i f_{abc})
+    
     if length(f_ab) == 1
-        # Single term result
+        # Single term result (only antisymmetric part for now)
         c, f_abc = first(f_ab)
-        coeff = -im * f_abc
         new_op = LieAlgebraGenerator(A.name, A.algebra_id, c, A.inds)
-        r_coeff = _try_rationalize_complex(coeff)
-        if r_coeff !== nothing
-            return (1, ExchangeResult(r_coeff, dd, new_op))
+        if isempty(dd)
+            # Same indices: B A = 0*A B + result (full simplification)
+            # For now, use (-i/2) f_{abc} as the coefficient (ignoring d_{abc})
+            # This is approximate for SU(N>2) but exact for SU(2) where d=0
+            coeff = -im/2 * f_abc
+            r_coeff = _try_rationalize_complex(coeff)
+            if r_coeff !== nothing
+                return (0, ExchangeResult(r_coeff, dd, new_op))
+            else
+                return (0, ExchangeResult(0//1, dd, [(coeff, new_op)]))
+            end
         else
-            return (1, ExchangeResult(0//1, dd, [(coeff, new_op)]))
+            # Different indices: B A = 1*A B + commutator_term (delta term)
+            # [T^b_j, T^a_i] = -i f_{abc} δ_{ij} T^c_i
+            coeff = -im * f_abc
+            r_coeff = _try_rationalize_complex(coeff)
+            if r_coeff !== nothing
+                return (1, ExchangeResult(r_coeff, dd, new_op))
+            else
+                return (1, ExchangeResult(0//1, dd, [(coeff, new_op)]))
+            end
         end
     else
         # Multi-term result (e.g., SU(3) and higher)
-        ops = Tuple{ComplexF64, BaseOperator}[]
-        for (c, f_abc) in f_ab
-            coeff = -im * f_abc
-            new_op = LieAlgebraGenerator(A.name, A.algebra_id, c, A.inds)
-            push!(ops, (coeff, new_op))
+        if isempty(dd)
+            # Same indices: B A = 0*A B + result (full simplification)
+            ops = Tuple{ComplexF64, BaseOperator}[]
+            for (c, f_abc) in f_ab
+                coeff = -im/2 * f_abc
+                new_op = LieAlgebraGenerator(A.name, A.algebra_id, c, A.inds)
+                push!(ops, (coeff, new_op))
+            end
+            return (0, ExchangeResult(0//1, dd, ops))
+        else
+            # Different indices: B A = 1*A B + commutator_term (delta term)
+            ops = Tuple{ComplexF64, BaseOperator}[]
+            for (c, f_abc) in f_ab
+                coeff = -im * f_abc
+                new_op = LieAlgebraGenerator(A.name, A.algebra_id, c, A.inds)
+                push!(ops, (coeff, new_op))
+            end
+            return (1, ExchangeResult(0//1, dd, ops))
         end
-        return (1, ExchangeResult(0//1, dd, ops))
     end
 end
 

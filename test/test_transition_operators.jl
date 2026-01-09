@@ -529,6 +529,44 @@ using QuantumAlgebra: δ, QuExpr, QuTerm, BaseOpProduct, QuIndex, BaseOperator,
             H = ∑(:i, Pr"ω_i" * Σ_i[2, 2])
             @test H isa QuExpr
         end
+        
+        @testset "Sum commutators" begin
+            # This tests the fix for the exchange prefactor bug in transition operators.
+            # Previously, _exchange_transition_operators always returned prefactor=1,
+            # which prevented proper simplification of commutators over sums.
+            
+            Σ_i = nlevel_ops(2, :σtrans, :i)
+            Σ_j = nlevel_ops(2, :σtrans, :j)
+            
+            # [|1⟩⟨2|_i, |2⟩⟨1|_j] should simplify via delta to |1⟩⟨1|_i - |2⟩⟨2|_i
+            # when indices match (from the δ_ij)
+            
+            # Sum version: [∑_i σ^12_i, ∑_j σ^21_j] should give ∑_k (σ^11_k - σ^22_k)
+            S12 = ∑(:i, Σ_i[1, 2])
+            S21 = ∑(:j, Σ_j[2, 1])
+            
+            result = normal_form(comm(S12, S21))
+            
+            # Expected: σ^11 - σ^22 summed over one index
+            Σ_k = nlevel_ops(2, :σtrans, :k)
+            expected = ∑(:k, Σ_k[1, 1]) - ∑(:k, Σ_k[2, 2])
+            
+            @test result == expected
+            
+            # 3-level system
+            Σ3_i = nlevel_ops(3, :Σ, :i)
+            Σ3_j = nlevel_ops(3, :Σ, :j)
+            
+            # [∑_i |1⟩⟨2|_i, ∑_j |2⟩⟨3|_j] = ∑_k |1⟩⟨3|_k (since j_A=2=i_B)
+            S12_3 = ∑(:i, Σ3_i[1, 2])
+            S23_3 = ∑(:j, Σ3_j[2, 3])
+            
+            result3 = normal_form(comm(S12_3, S23_3))
+            Σ3_k = nlevel_ops(3, :Σ, :k)
+            expected3 = ∑(:k, Σ3_k[1, 3])
+            
+            @test result3 == expected3
+        end
     end
 
     # =========================================================================

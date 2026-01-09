@@ -1136,6 +1136,84 @@ end
     end
 
     # =========================================================================
+    # Sum Commutators (Critical: Tests for exchange prefactor fix)
+    # =========================================================================
+    @testset "Sum commutators" begin
+        # This tests the fix for the exchange prefactor bug.
+        # Previously, _exchange_lie_algebra_generators always returned prefactor=1,
+        # which prevented proper simplification of [∑T^a, ∑T^b].
+        # The fix returns prefactor=0 for same-site (full simplification) and
+        # prefactor=1 with doubled coefficient for different-site (delta term).
+        
+        @testset "SU(2) sum commutators" begin
+            # [∑_i T¹_i, ∑_j T²_j] should simplify to i ∑_k T³_k
+            S1 = ∑(:i, su_generator(2, :T, 1, :i))
+            S2 = ∑(:j, su_generator(2, :T, 2, :j))
+            S3 = ∑(:k, su_generator(2, :T, 3, :k))
+            
+            result = normal_form(comm(S1, S2))
+            expected = 1im * S3
+            
+            # The result should be a single sum, not a double sum
+            @test result == expected
+            
+            # Cyclic
+            @test normal_form(comm(S2, S3)) == 1im * ∑(:i, su_generator(2, :T, 1, :i))
+            @test normal_form(comm(S3, S1)) == 1im * ∑(:j, su_generator(2, :T, 2, :j))
+        end
+        
+        @testset "SU(2) product of sums" begin
+            # (∑_i T¹_i)(∑_j T¹_j) should simplify properly
+            S1 = ∑(:i, su_generator(2, :T, 1, :i))
+            
+            result = normal_form(S1 * S1)
+            # Should contain both ∑_i (1/4) from same-site and ∑_{i,j} T¹_i T¹_j from different sites
+            @test result isa QuExpr
+            
+            # The self-product should not be a simple ∑∑ of T¹T¹
+            # since same-site terms contract to 1/4
+        end
+        
+        @testset "SU(3) sum commutators" begin
+            G1 = ∑(:i, su_generator(3, :G, 1, :i))
+            G4 = ∑(:j, su_generator(3, :G, 4, :j))
+            G7 = ∑(:k, su_generator(3, :G, 7, :k))
+            
+            # [G¹, G⁴] = i G⁷ at same site
+            result = normal_form(comm(G1, G4))
+            expected = 1im * G7
+            @test result == expected
+        end
+        
+        @testset "Mixed index sums" begin
+            # Verify that different indices properly give delta terms
+            T1_i = su_generator(2, :T, 1, :i)
+            T2_j = su_generator(2, :T, 2, :j)
+            
+            # [T¹_i, T²_j] = i δ_{ij} T³_i for different symbolic indices
+            result = normal_form(comm(T1_i, T2_j))
+            expected = myδ_local(:i, :j) * 1im * su_generator(2, :T, 3, :i)
+            @test result == expected
+        end
+        
+        @testset "Comparison with native TLS" begin
+            # Native TLS sums work correctly - verify SU(2) generators match
+            tls_result = normal_form(comm(∑(:i, σx(:i)), ∑(:j, σy(:j))))
+            
+            # For SU(2) with σ as name (using tls_to_su2 normalization: σ = 2T)
+            # [∑σx, ∑σy] = 2i ∑σz
+            @test tls_result == 2im * ∑(:k, σz(:k))
+            
+            # SU(2) generators: [∑T¹, ∑T²] = i ∑T³
+            su2_result = normal_form(comm(
+                ∑(:i, su_generator(2, :T, 1, :i)),
+                ∑(:j, su_generator(2, :T, 2, :j))
+            ))
+            @test su2_result == 1im * ∑(:k, su_generator(2, :T, 3, :k))
+        end
+    end
+    
+    # =========================================================================
     # Edge Cases
     # =========================================================================
     @testset "Edge cases" begin
