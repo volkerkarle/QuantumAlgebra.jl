@@ -52,20 +52,50 @@ end
 
 # dynamically changeable options
 const _using_σpm = Ref(false)
+"""
+    use_σpm(t::Bool=true; set_preference=false)
+
+Select whether TLS operators are expressed in the `(σ₊, σ₋)` basis (`true`) or
+in the `(σx, σy, σz)` basis (`false`). If `set_preference` is `true`, the choice
+is persisted via `Preferences.jl` for future sessions.
+"""
 function use_σpm(t::Bool=true; set_preference=false)
     _using_σpm[] = t
     set_preference && @set_preferences!("use_σpm" => t)
     nothing
 end
+"""
+    use_σxyz(; set_preference=false)
+
+Convenience helper to switch to the `(σx, σy, σz)` basis. Equivalent to
+`use_σpm(false; set_preference)`.
+"""
 use_σxyz(;set_preference=false) = use_σpm(false;set_preference)
+"""
+    using_σpm()
+
+Return whether TLS operators are currently configured to use the `(σ₊, σ₋)`
+basis.
+"""
 using_σpm() = _using_σpm[]
 
 const _auto_normal_form = Ref(false)
+"""
+    auto_normal_form(t::Bool=true; set_preference=false)
+
+Enable or disable automatic normal-ordering of expressions on construction.
+When `set_preference` is `true`, the setting is stored with `Preferences.jl`.
+"""
 function auto_normal_form(t::Bool=true; set_preference=false)
     _auto_normal_form[] = t
     set_preference && @set_preferences!("auto_normal_form" => t)
     nothing
 end
+"""
+    using_auto_normal_form()
+
+Return whether automatic normal-ordering is currently enabled.
+"""
 using_auto_normal_form() = _auto_normal_form[]
 
 const IndexInt = Int32
@@ -79,6 +109,29 @@ const IndexInt = Int32
     num::IndexInt
     QuIndex(sym::Char,num::Integer=typemin(IndexInt)) = new(sym,num)
 end
+
+"""
+    QuIndex
+
+Represents an index in a quantum operator expression.
+
+A `QuIndex` can be:
+- An integer index (created with `QuIndex(i)` for integer `i`)
+- A symbolic index like `QuIndex(:i)` or `QuIndex("i_2")`
+- A sum index created with `sumindex(n)`
+
+# Examples
+```julia
+i = QuIndex(1)              # Integer index 1
+i = QuIndex(:i)             # Symbolic index 'i'
+i = QuIndex("i_2")          # Symbolic index 'i' with subscript 2
+si = sumindex(1)            # Sum index #₁
+```
+
+# See also
+[`sumindex`](@ref), [`issumindex`](@ref), [`isintindex`](@ref)
+"""
+QuIndex
 QuIndex(ii::QuIndex) = ii
 QuIndex(ii::Symbol) = QuIndex(string(ii))
 function QuIndex(ii::String)
@@ -184,6 +237,27 @@ const BaseOpType_latex = ("^{\\dagger}", "^{\\dagger}", "^{+}", "^{x}", "^{y}", 
     BaseOperator(t,name,inds...) = new(t,QuOpName(name),make_indices(inds...))
 end
 
+"""
+    BaseOperator
+
+Represents a single quantum operator in an expression.
+
+A `BaseOperator` is one of:
+- Bosonic operators: `BosonCreate`, `BosonDestroy`
+- Fermionic operators: `FermionCreate`, `FermionDestroy`
+- Two-level system (TLS) operators: `TLSCreate`, `TLSDestroy`, `TLSx`, `TLSy`, `TLSz`
+
+Each operator is associated with a name and indices.
+
+# Examples
+```julia
+a = BosonCreate(:a)        # Bosonic creation operator a†
+f = FermionDestroy(:f, 1)  # Fermionic annihilation operator f₁
+σx = TLSx(:σ, :i)          # TLS x operator σ_i
+```
+"""
+BaseOperator
+
 for (op,desc) in (
     (:BosonDestroy,"bosonic annihilation"),
     (:BosonCreate,"bosonic creation"),
@@ -212,6 +286,21 @@ BaseOpProduct() = BaseOpProduct(BaseOperator[])
     iB::QuIndex
     δ(iA,iB) = (@assert !isnoindex(iA) && !isnoindex(iB); new(iA,iB))
 end
+
+"""
+    δ(iA, iB)
+
+Represents a Kronecker delta function δ_{iA,iB} in a quantum expression.
+
+The delta function is zero if indices are different, and one if they are the same.
+
+# Examples
+```julia
+δ(QuIndex(1), QuIndex(2))    # δ₁₂
+δ(QuIndex(:i), QuIndex(:j))  # δᵢⱼ
+```
+"""
+δ
 function δ(Ainds::QuIndices,Binds::QuIndices)
     length(Ainds) == length(Binds) || return nothing
 
@@ -232,15 +321,71 @@ end
 @concrete struct ExpVal
     ops::BaseOpProduct
 end
+
+"""
+    ExpVal(ops::BaseOpProduct)
+
+Represents an expectation value ⟨ops⟩ in a quantum expression.
+
+Expectation values contain products of quantum operators that should be evaluated as a single unit.
+
+# Examples
+```julia
+ev = ExpVal(BaseOpProduct([a, a_dag]))  # ⟨a† a⟩
+```
+
+# See also
+[`Corr`](@ref), [`expval`](@ref)
+"""
+ExpVal
+
 @concrete struct Corr
     ops::BaseOpProduct
 end
+
+"""
+    Corr(ops::BaseOpProduct)
+
+Represents a correlator ⟨ops⟩c in a quantum expression.
+
+Correlators (or cumulants) represent connected correlations in the expectation value.
+
+# Examples
+```julia
+corr = Corr(BaseOpProduct([a, a_dag]))  # ⟨a† a⟩c
+```
+
+# See also
+[`ExpVal`](@ref), [`corr`](@ref)
+"""
+Corr
 
 @concrete struct Param
     name::QuOpName
     state::Char
     inds::QuIndices
 end
+
+"""
+    Param(name, state, inds)
+
+Represents a parameter in a quantum expression.
+
+Parameters are scalar values that can appear in quantum expressions, with optional indices
+and conjugation state.
+
+# Arguments
+- `name`: Symbol identifying the parameter
+- `state`: 'r' for real, 'n' for normal, 'c' for conjugate
+- `inds`: Quantum indices (optional)
+
+# Examples
+```julia
+p = Param(:λ, 'r')        # Real parameter λ
+p = Param(:ω, 'r', 1)     # Real parameter ω₁
+```
+"""
+Param
 
 @concrete struct QuTerm
     nsuminds::IndexInt # have a sum over n indices, represented by QuIndex with issumindex(ind)==true
@@ -250,6 +395,24 @@ end
     corrs::Vector{Corr}
     bares::BaseOpProduct
 end
+
+"""
+    QuTerm
+
+Represents a single term in a quantum algebra expression.
+
+A term consists of:
+- Sum indices (summed-over indices)
+- Delta functions
+- Parameters
+- Expectation values
+- Correlators/cumulants
+- Bare operators
+
+# See also
+[`QuExpr`](@ref), [`BaseOperator`](@ref)
+"""
+QuTerm
 QuTerm() = QuTerm(BaseOpProduct())
 QuTerm(op::BaseOperator) = QuTerm(BaseOpProduct([op]))
 QuTerm(ops::BaseOpProduct) = QuTerm(0,δ[],Param[],ExpVal[],Corr[],ops)
@@ -264,6 +427,24 @@ QuTerm(δs::Vector{δ},Cs::Vector{Corr})   = QuTerm(0,δs,Param[],ExpVal[],Cs,Ba
 
 Base.isempty(A::QuTerm) = A.nsuminds == 0 && isempty(A.δs) && isempty(A.params) && isempty(A.expvals) && isempty(A.corrs) && isempty(A.bares)
 
+"""
+    QuExpr
+
+A quantum algebra expression represented as a sum of terms.
+
+A `QuExpr` is a dictionary mapping `QuTerm`s to numeric coefficients stored as `Number`.
+Using `Number` allows heterogeneous numeric types (e.g., `Int`, `Float64`, `Rational`,
+`Complex`) to coexist without forced type conversions.
+
+# Constructors
+
+- The quantum operator constructors generated with `@boson_ops`, `@fermion_ops`, etc., return `QuExpr` objects.
+- `QuExpr()`: Create an empty expression (zero) - `zero(QuExpr)` works as well.
+- `QuExpr(x)`: Create a constant expression from a number `x`. `QuExpr(1)` is equivalent to `one(QuExpr)`.
+
+# See also
+[`QuTerm`](@ref), [`normal_form`](@ref)
+"""
 struct QuExpr
     # A QuantumAlgebra Expression is saved as a Dictionary of QuTerms with scalar prefactors
     terms::Dict{QuTerm,Number}
@@ -303,8 +484,34 @@ function _add_sum_term!(A::QuExpr,oB::QuTerm,sB,sold)
 end
 _map_quexpr_ops(f,A::QuExpr) = QuExpr((f(t),s) for (t,s) in A.terms)
 
+"""
+    map_scalar_function(f, A::QuExpr)
+
+Apply a function to all scalar coefficients in a quantum expression.
+
+# Arguments
+- `f`: Function to apply to each coefficient
+- `A`: Quantum expression
+
+# Returns
+A new `QuExpr` with function applied to all coefficients
+
+# Examples
+```julia
+A = QuExpr(a) + 2 * QuExpr(a_dag)
+B = map_scalar_function(x -> 2x, A)  # Double all coefficients
+```
+"""
 map_scalar_function(f,A::QuExpr) = QuExpr((t,f(s)) for (t,s) in A.terms)
 
+"""
+    QuExprConstructor
+
+Helper struct for creating operator expressions with automatic conjugate support.
+
+Used internally by macros like `@boson_ops` and `@fermion_ops` to provide
+both normal and daggered operator constructors.
+"""
 struct QuExprConstructor{F,Fdag}
     name::String
     f::F
@@ -324,7 +531,30 @@ wrapdagdeprecated(f) = (args...) -> (Base.depwarn("`xdag()` constructors are dep
 #################################################################
 ## "external" functions that always construct QuExpr           ##
 #################################################################
-"`boson_ops(name::Symbol)`: return function for creating bosonic annihilation and creation operators with name `name` (i.e., wrappers of [`BosonDestroy`](@ref) and [`BosonCreate`](@ref))"
+
+"""
+    boson_ops(name::Symbol)
+
+Create constructors for bosonic operators with the given name.
+
+Returns a tuple of `(annihilation, creation)` operators that can be called
+to create quantum expressions containing these operators.
+
+# Arguments
+- `name`: Symbol for the operator name (e.g., `:a`, `:b`)
+
+# Returns
+- Tuple `(a, a†)` of `QuExprConstructor` objects
+
+# Examples
+```julia
+a, a_dag = boson_ops(:a)
+expr = a(1) + a_dag(2)  # a₁ + a₂†
+```
+
+# See also
+[`fermion_ops`](@ref), [`@boson_ops`](@ref)
+"""
 function boson_ops(name::Symbol)
     op_name = QuOpName(name)
     c = QuExprConstructor(string(name),     (args...) -> QuExpr(BosonDestroy(op_name,args...)),
@@ -333,7 +563,29 @@ function boson_ops(name::Symbol)
     c, cdag
 end
 
-"`fermion_ops(name::Symbol)`: return function for creating fermionic annihilation and creation operators with name `name` (i.e., wrappers of [`FermionDestroy`](@ref) and [`FermionCreate`](@ref))"
+"""
+    fermion_ops(name::Symbol)
+
+Create constructors for fermionic operators with the given name.
+
+Returns a tuple of `(annihilation, creation)` operators that can be called
+to create quantum expressions containing these operators.
+
+# Arguments
+- `name`: Symbol for the operator name (e.g., `:f`, `:c`)
+
+# Returns
+- Tuple `(f, f†)` of `QuExprConstructor` objects
+
+# Examples
+```julia
+f, f_dag = fermion_ops(:f)
+expr = f(1) + f_dag(2)  # f₁ + f₂†
+```
+
+# See also
+[`boson_ops`](@ref), [`@fermion_ops`](@ref)
+"""
 function fermion_ops(name::Symbol)
     op_name = QuOpName(name)
     c = QuExprConstructor(string(name),     (args...) -> QuExpr(FermionDestroy(op_name,args...)),
@@ -342,7 +594,14 @@ function fermion_ops(name::Symbol)
     c, cdag
 end
 
-"`tlspm_ops(name::Symbol)`: return functions for creating jump operators for a two-level system with name `name`. The output of these functions depends on setting of use_σpm."
+"""
+    tlspm_ops(name::Symbol)
+
+Return constructors for TLS ladder operators `(σ₋, σ₊)` for the given `name`.
+
+The concrete output depends on `use_σpm`: when true, returns annihilation/creation
+expressions; when false, returns linear combinations of `σx` and `σy`.
+"""
 function tlspm_ops(name::Symbol)
     op_name = QuOpName(name)
     namem = string(name,"m")
@@ -352,7 +611,14 @@ function tlspm_ops(name::Symbol)
     (QuExprConstructor(namem, fm, namep, fp), QuExprConstructor(namep, fp, namem, fm))
 end
 
-"`tlsxyz_ops(name::Symbol)`: return functions for creating Pauli operators for a two-level system with name `name`. The output of these functions depends on setting of use_σpm."
+"""
+    tlsxyz_ops(name::Symbol)
+
+Return constructors for Pauli operators `(σₓ, σ_y, σ_z)` for the given `name`.
+
+The concrete output depends on `use_σpm`: when true, returns combinations of ladder
+operators; when false, returns the direct `σx/σy/σz` operators.
+"""
 function tlsxyz_ops(name::Symbol)
     op_name = QuOpName(name)
     namex = string(name,"x")
@@ -408,6 +674,12 @@ end
 # Pc"ω_i,j" = param(:ω,'n',:i,:j) (complex parameter)
 # Pr"ω_i,j" = param(:ω,'r',:i,:j) (real parameter)
 
+"""
+    param(name, [state], inds...)
+
+Construct a parameter as a `QuExpr`. `state` is one of `n` (normal/complex),
+`r` (real), or `c` (conjugate). Indices are optional.
+"""
 param(name::Symbol,args...) = param(QuOpName(name),args...)
 param(name::QuOpName,args...) = param(name,'n',args...)
 function param(name::QuOpName,state::Char,inds...)
@@ -440,6 +712,12 @@ macro Pr_str(s)
     param(par,'r',inds)
 end
 
+"""
+    expval(A)
+
+Wrap bare operators inside `A` into a formal expectation value ⟨A⟩.
+Accepts `QuTerm` or `QuExpr`; numeric inputs are returned as constant expressions.
+"""
 function expval(A::QuTerm)
     if isempty(A.bares)
         A
@@ -447,6 +725,12 @@ function expval(A::QuTerm)
         QuTerm(A.nsuminds,A.δs,A.params,[A.expvals; ExpVal(A.bares)],A.corrs,BaseOpProduct())
     end
 end
+"""
+    corr(A)
+
+Wrap bare operators inside `A` into a formal connected correlator ⟨A⟩₍c₎.
+Accepts `QuTerm` or `QuExpr`; numeric inputs are returned as constant expressions.
+"""
 function corr(A::QuTerm)
     if isempty(A.bares)
         A
@@ -455,9 +739,7 @@ function corr(A::QuTerm)
     end
 end
 
-"`expval(A::QuExpr)`: replace expression A by its (formal) expectation value ⟨A⟩."
 expval(A::QuExpr) = _map_quexpr_ops(expval,A)
-"`expval(A::QuExpr)`: replace expression A by its (formal) correlator ⟨A⟩c."
 corr(A::QuExpr) = _map_quexpr_ops(corr,A)
 
 expval(A::Number) = QuExpr(A)

@@ -177,6 +177,11 @@ end
 @inline Base.isless(A::T,B::T) where T<:Union{ExpVal,Corr} = recursive_cmp(A,B) < 0
 @inline Base.isless(A::QuTerm,B::QuTerm) = cmp(A,B) < 0
 
+"""
+    comm(A, B)
+
+Compute the commutator ``[A,B] = A*B - B*A``.
+"""
 comm(A,B) = A*B - B*A
 
 Base.adjoint(A::BaseOperator) = BaseOperator(BaseOpType_adj[Int(A.t)],A.name,A.inds)
@@ -628,6 +633,14 @@ function _add_with_normal_order!(A::QuExpr,t::QuTerm,s,shortcut_vacA_zero=false)
     end
 end
 
+"""
+    normal_form(A::QuExpr; shortcut_vacA_zero=false)
+
+Return an equivalent expression in normal-ordered form (all commutations performed).
+
+`shortcut_vacA_zero` can be set to `true` when the expression will be multiplied
+by a vacuum state from the right, allowing early elimination of annihilation terms.
+"""
 function normal_form(A::QuExpr,shortcut_vacA_zero=false)
     An = QuExpr()
     for (t,s) in A.terms

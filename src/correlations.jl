@@ -185,6 +185,11 @@ function corr2expvals_inds(N)
     end
 end
 
+"""
+    corr_as_expvals(A::QuExpr)
+
+Rewrite connected correlators in `A` into ordinary expectation values.
+"""
 function corr_as_expvals(A::QuExpr)
     newA = QuExpr()
     corrterms = QuExpr()

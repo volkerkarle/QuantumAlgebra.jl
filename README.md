@@ -415,10 +415,13 @@ permanently (this uses [Preferences.jl](https://github.com/JuliaPackaging/Prefer
     slower (allocates memory). The alternative is `"NTuple{N}"` (e.g.,
     `"NTuple{5}"`), which uses a fixed-size tuple to store up to `N` indices.
     This is faster (stack-allocated) but limits the number of indices per
-    operator to a maximum of `N`.
-    This setting can be changed with `QuantumAlgebra.set_quindices_type("Vector"
-    / "NTuple{N}")`. Note that changing this value requires restarting the Julia
-    session to take effect.
+    operator to a maximum of `N`. This setting can be changed with
+    `QuantumAlgebra.set_quindices_type("Vector" / "NTuple{N}")`. Note that
+    changing this value requires restarting the Julia session to take effect.
+    For normal usage, `"Vector"` is recommended -- the `"NTuple{N}"` option
+    is mainly intended for specific projects where extremely large expressions
+    (100.000+ terms) are treated and speed becomes critical. Note that the
+    setting can be changed locally within each project using `QuantumAlgebra`.
 
 ## Citing
 

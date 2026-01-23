@@ -217,4 +217,10 @@ end
     return dAs, values(eqsys.eqs)
 end
 
+"""
+    latex(A)
+
+Render any `QuantumObject` to a raw LaTeX string using `Latexify.jl` recipes.
+Useful for pretty-printing expressions or embedding results in documents.
+"""
 latex(A::QuantumObject) = latexify(A,env=:raw).s
