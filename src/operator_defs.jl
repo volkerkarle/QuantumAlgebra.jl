@@ -153,11 +153,30 @@ function QuIndex(ii::String)
     end
 end
 QuIndex(ii::Integer) = QuIndex('\0',ii)
+
+"""
+    sumindex(i)
+
+Create a summation index with index `i`. These indices are used internally for
+implicit summation (Einstein summation convention).
+"""
 sumindex(ii) = QuIndex('#',ii)
 # by convention, these should never be present in the input or output of any function,
 # but just as temporary variables that cannot conflict with any other within a computation
 tmpindex(ii) = QuIndex('!',ii)
+
+"""
+    isintindex(i::QuIndex)
+
+Check if the index `i` is an integer index (created with `QuIndex(i::Integer)`).
+"""
 isintindex(ii::QuIndex) = ii.sym=='\0'
+
+"""
+    issumindex(i::QuIndex)
+
+Check if the index `i` is a summation index (created with `sumindex(i)`).
+"""
 issumindex(ii::QuIndex) = ii.sym=='#'
 const NoIndex = QuIndex(typemin(IndexInt))
 isnoindex(ii::QuIndex) = ii == NoIndex
