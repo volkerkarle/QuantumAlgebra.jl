@@ -219,6 +219,9 @@ end
 
             @test normal_form(σy(:i)*σy(:i)*σy(:i)*σy(:i)*σy(:i)*σy(:i)*σx(:i)) == σx(:i)
             @test normal_form(σy(:i)*σy(:i)*σy(:i)*σy(:i)*σy(:i)*σy(:i)*σx(:j)) == σx(:j)
+            
+            @test normal_form(σx(1) * σx(2) * σy(1)^2) == normal_form(σx(1) * σx(2))
+            @test normal_form(σx(1) * σy(1)^2 * σx(2)) == normal_form(σx(1) * σx(2))
 
             @test_throws ArgumentError normal_form(QuExpr(TLSx(:σ)) * QuExpr(TLSCreate(:σ)))
 

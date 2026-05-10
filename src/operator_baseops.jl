@@ -190,6 +190,11 @@ end
 @inline Base.isless(A::T,B::T) where T<:Union{ExpVal,Corr} = recursive_cmp(A,B) < 0
 @inline Base.isless(A::QuTerm,B::QuTerm) = cmp(A,B) < 0
 
+"""
+    comm(A, B)
+
+Compute the commutator ``[A,B] = A*B - B*A``.
+"""
 comm(A,B) = A*B - B*A
 
 function Base.adjoint(A::BaseOperator)
@@ -921,19 +926,16 @@ function _contract_lie_algebra_generators(A::BaseOperator, B::BaseOperator)
     return (true, result)
 end
 
-function normal_order!(ops::BaseOpProduct,term_collector,shortcut_vacA_zero=false)
+function normal_order!(ops::BaseOpProduct,term_collector,shortcut_vacA_zero=false,prefactor=one(ComplexInt))
     # do an insertion sort to get to normal ordering
     # reference: https://en.wikipedia.org/wiki/Insertion_sort
     A = ops.v
-    # prefactor starts as 1, but can become any Number type through multiplications
-    # (e.g., ComplexF64, Rational, or symbolic types when Symbolics.jl is loaded)
-    prefactor::Number = 1
     for i = 2:length(A)
         j = i
         while j>1 && A[j]<A[j-1]
             # need to commute A[j-1] and A[j]
             pp, exc_res = _exchange(A[j],A[j-1])
-            #println("exchanging A[$j] = $(A[j]) and A[$kk] = $(A[kk]) gave result: $pp, $exc_res.")
+            #println("exchanging A[$j] = $(A[j]) and A[$(j-1)] = $(A[j-1]) gave result: $pp, $exc_res.")
             if exc_res !== nothing
                 if has_multi_ops(exc_res)
                     # Multi-operator result from SU(N) with N > 2
@@ -1125,9 +1127,11 @@ function normal_order!(ops::BaseOpProduct,term_collector,shortcut_vacA_zero=fals
                         iszero(prefactor) && return prefactor
                         if op === nothing
                             deleteat!(A,(k,kp))
+                            #println("deleted indices $k and $kp, A is now: $A, prefactor is now: $prefactor")
                         else
                             A[k] = op
                             deleteat!(A,kp)
+                            #println("deleted index $kp and replaced $k by $op. A is now: $A, prefactor is now: $prefactor")
                         end
                         k > 1 && (k -= 2)
                         break
@@ -1138,8 +1142,11 @@ function normal_order!(ops::BaseOpProduct,term_collector,shortcut_vacA_zero=fals
         end
     end
     if did_contractions
+        #println("after contractions, A is: $A, prefactor is: $prefactor, term_collector is: $term_collector")
         # do another round of normal ordering since this could have changed after contractions
-        prefactor *= normal_order!(ops,term_collector)
+        # the prefactor of the term we were working on needs to be passed to normal_order!
+        # to include in the term_collector terms
+        prefactor = normal_order!(ops,term_collector,false,prefactor)
     end
     prefactor
 end
@@ -1227,6 +1234,14 @@ function _add_with_normal_order!(A::QuExpr,t::QuTerm,s,shortcut_vacA_zero=false)
     end
 end
 
+"""
+    normal_form(A::QuExpr; shortcut_vacA_zero=false)
+
+Return an equivalent expression in normal-ordered form (all commutations performed).
+
+`shortcut_vacA_zero` can be set to `true` when the expression will be multiplied
+by a vacuum state from the right, allowing early elimination of annihilation terms.
+"""
 function normal_form(A::QuExpr,shortcut_vacA_zero=false)
     An = QuExpr()
     for (t,s) in A.terms

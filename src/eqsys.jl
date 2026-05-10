@@ -55,10 +55,27 @@ function _corrheis_cached(ops::BaseOpProduct,H::QuExpr,Ls)::QuExpr
     end
 end
 
+"""
+    droplen(n)
+
+Create a filter that drops correlators/expectation values with length greater than `n`.
+Useful for truncating hierarchies of equations.
+"""
 droplen(n) = Base.Fix1(droplen,n)
 droplen(n,A::QuTerm) = (any(@. length(A.corrs) > n) || any(@. length(A.expvals) > n)) ? 0 : 1
 droplen(n,A::QuExpr) = QuExpr((t,droplen(n,t)*s) for (t,s) in A.terms)
 
+"""
+    dropcorr(n::Int)
+
+Returns a filter function that rewrites terms with correlations `corrs` or
+expectation values `expvals` of length greater than `n` in terms of lower-order
+expressions (up to order `n`) and higher-order correlators, and then drops those
+higher-order correlations.
+
+For example, `dropcorr(1)` will replace
+``⟨a^† a⟩ = ⟨a^† a⟩_c + ⟨a^†⟩ ⟨a⟩ ≈ ⟨a^†⟩ ⟨a⟩``.
+"""
 dropcorr(n) = Base.Fix1(dropcorr,n)
 function dropcorr(n,A::QuExpr)
     Anew = QuExpr()
@@ -100,6 +117,38 @@ end
 get_opstodo(ops::QuExpr,H) = get_opstodo((ops,),H)
 get_opstodo(ops,H) = [canon_inds()(to_opprod(normal_form(A))) for A in ops]
 
+"""
+    heisenberg_eom_system(H, rhsfilt, Ls=(), ops=nothing)
+
+Calculates the system of Heisenberg equations of motion for either the
+expectation values or the cumulants / correlators of operator products, starting
+from a Hamiltonian `H` and a list of Lindblad terms `Ls` describing decoherence.
+
+`rhsfilt` is a filter function that is applied to the right-hand side of the
+equations. Typically, these equation systems are not closed without
+approximations as equations for products of n operators involve products of m>n
+operators, so the system has to be truncated. This is achieved with the filter
+function that removes higher-order terms or rewrites them (approximately) in
+terms of lower-order expressions.
+
+`ops` is an optional list of operators for which the equations should be generated.
+If `ops` is `nothing` (default), the function will try to determine the relevant
+operators automatically from the Hamiltonian and Lindblad terms.
+
+The function returns a `QuEqSys` object containing the system of equations.
+
+# Examples
+```julia
+julia> using QuantumAlgebra
+julia> @boson_ops a;
+julia> H = Pr"ω"*a'()*a() + Pr"χ"*a'()*(a'()+a())*a();
+julia> Ls = ((Pr"γ",a()),);
+julia> EQ = heisenberg_eom_system(H,2,Ls,a())
+dₜ⟨a()⟩ = -1//2 γ ⟨a()⟩  - 1i ω ⟨a()⟩  - 2i χ ⟨a†() a()⟩  - 1i χ ⟨a()²⟩ 
+dₜ⟨a†() a()⟩ = -γ ⟨a†() a()⟩ 
+dₜ⟨a()²⟩ = -2i χ ⟨a()⟩  - γ ⟨a()²⟩  - 2i ω ⟨a()²⟩ 
+```
+"""
 heisenberg_eom_system(H::QuExpr,rhsfilt,Ls=(),ops=nothing) = heisenberg_eom_system(ExpVal,H,rhsfilt,Ls,ops)
 heisenberg_eom_system(::Type{LHSfunc},H::QuExpr,maxord::Integer,Ls=(),ops=nothing) where LHSfunc = heisenberg_eom_system(LHSfunc,H,droplen(maxord),Ls,ops)
 heisenberg_eom_system(::Type{LHSfunc},H::QuExpr,rhsfilter,Ls=(),ops=nothing) where LHSfunc = QuEqSys{LHSfunc}(H,rhsfilter,Ls,ops)

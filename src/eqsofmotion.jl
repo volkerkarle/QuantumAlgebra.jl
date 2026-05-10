@@ -45,6 +45,12 @@ lindbladterm(inds::T,args...) where T<:NTuple{N,Union{Symbol,QuIndex}} where N =
 _lindbladterm(args) = lindbladterm(args...)
 _lindbladterm(L::AbstractLindbladTerm) = L
 
-"""`heisenberg_eom(A,H,Ls=())` calculates ``\\dot{A} = i [H,A] + \\sum_i (L_i^† A L_i - ½ \\{L_i^† L_i, A\\})``, where `Ls = (L_1,L_2,...)` is an iterable of Lindblad operators."""
+"""
+    heisenberg_eom(A, H; Ls=())
+
+Compute the Heisenberg equation of motion for an observable `A` with Hamiltonian `H` and optional Lindblad operators `Ls`.
+
+Returns ``\\dot{A} = i [H,A] + \\sum_i (L_i^† A L_i - \\tfrac{1}{2} \\{L_i^† L_i, A\\})``.
+"""
 heisenberg_eom(A::QuExpr,H::QuExpr,Ls::Tuple{Vararg{Union{<:Tuple,AbstractLindbladTerm}}}=()) = _heisenberg_eom(A,H,_lindbladterm.(Ls)...)
 _heisenberg_eom(A::QuExpr,H::QuExpr,Ls::AbstractLindbladTerm...) = mapfoldl(L->L(A),+,Ls;init=1im*comm(H,A))

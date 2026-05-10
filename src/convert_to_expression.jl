@@ -17,7 +17,13 @@ varname(A::Union{ExpVal,Corr}) = varname(A.ops)
 indexpr(ind::QuIndex) = issumindex(ind) ? Symbol(:s̄,subscript(ind.num)) : (isintindex(ind) ? ind.num : Symbol(ind))
 indexpr(A) = indexpr.(indices(A))
 
-# the varnames optional (and ignored) argument allows to define a closure getexpr(A) = julia_expression(A,my_names)
+"""
+    julia_expression(A; varnames=nothing)
+
+Convert a `QuExpr` (or related quantum objects) into a plain Julia expression constructed from
+numbers and symbolic variables. Optional `varnames` argument restricts allowed expectation value or
+correlator symbols; when provided, conjugates may be rewritten to match available names.
+"""
 function julia_expression(A::Param,varnames=nothing)
     # the parsing here allows "parameters" that are functions
     # e.g., with names such as "f(t)"

@@ -328,6 +328,16 @@ function _apply_on_vacuum_modes(func,A::QuTerm,fac,modes_in_vacuum::Set{QuOpName
     return (Anew, fac)
 end
 
+"""
+    Avac(A; modes_in_vacuum=nothing)
+    vacA(A; modes_in_vacuum=nothing)
+
+Simplify an operator expression by acting on the vacuum from the right (`Avac`)
+or from the left (`vacA`). Returns a new `QuExpr` with terms that annihilate the
+vacuum removed and with any TLS `σz` eigenvalue simplifications applied. Set
+`modes_in_vacuum` to a set or iterable of modes to restrict the vacuum
+assumption; defaults to all modes.
+"""
 Avac(A::QuTerm,fac,modes_in_vacuum) = _apply_on_vacuum_modes(_Avac, A, fac, modes_in_vacuum)
 vacA(A::QuTerm,fac,modes_in_vacuum) = _apply_on_vacuum_modes(_vacA, A, fac, modes_in_vacuum)
 
@@ -335,15 +345,6 @@ Avac(A::QuExpr,modes_in_vacuum=nothing) = (mv = _parse_modes_in_vacuum(modes_in_
 vacA(A::QuExpr,modes_in_vacuum=nothing) = (mv = _parse_modes_in_vacuum(modes_in_vacuum); QuExpr(vacA(t,s,mv) for (t,s) in normal_form(A).terms))
 Avac(s::Number,modes_in_vacuum=nothing) = QuExpr(s)
 vacA(s::Number,modes_in_vacuum=nothing) = QuExpr(s)
-
-
-"""
-    Avac(A::QuExpr), vacA(A::QuExpr)
-
-Simplify operator by assuming it is applied to the vacuum from the left or
-right, respectively. To be precise, `Avac(A)` returns ``A'`` such that ``A'|0⟩ =
-A|0⟩``, while `vacA(A)` does the same for ``⟨0|A``."""
-Avac, vacA
 
 function _TLS_to_pm_normal(A::QuExpr,shortcut_vacA_zero)
     An = QuExpr()
@@ -384,10 +385,11 @@ function _TLS_to_pm_normal(A::QuExpr,shortcut_vacA_zero)
 end
 
 """
-    vacExpVal(A::QuExpr,S::QuExpr=1)
+    vacExpVal(A::QuExpr, S::QuExpr=1; modes_in_vacuum=nothing)
 
-Calculate the vacuum expectation value ``⟨0|S^\\dagger A S|0⟩``, i.e., the
-expectation value ``⟨ψ|A|ψ⟩`` for the state defined by ``|ψ⟩= S|0⟩```.
+Calculate the vacuum expectation value ``⟨0|S^\\\\dagger A S|0⟩``, i.e. the
+expectation value ``⟨ψ|A|ψ⟩`` for the state ``|ψ⟩ = S|0⟩``. Optionally restrict
+the vacuum assumption to specific modes via `modes_in_vacuum`.
 """
 function vacExpVal(A::QuExpr,stateop::QuExpr=QuExpr(QuTerm()),modes_in_vacuum=nothing)
     # simplify down as much as possible by applying vacuum from left and right
