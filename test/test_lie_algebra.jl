@@ -1148,7 +1148,7 @@ end
             # Native TLS sums work correctly - verify SU(2) generators match
             tls_result = normal_form(comm(∑(:i, σx(:i)), ∑(:j, σy(:j))))
             
-            # For SU(2) with σ as name (using tls_to_su2 normalization: σ = 2T)
+            # For SU(2) with σ as name (using σ = 2T normalization)
             # [∑σx, ∑σy] = 2i ∑σz
             @test tls_result == 2im * ∑(:k, σz(:k))
             
