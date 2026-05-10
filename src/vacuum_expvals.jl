@@ -407,8 +407,38 @@ function vacExpVal(A::QuExpr,stateop::QuExpr=QuExpr(QuTerm()),modes_in_vacuum=no
     x = _TLS_to_pm_normal(x*stateop, isnothing(mv)) # second argument is shortcut_vacA_zero
 
     vAv = QuExpr()
-    for (t,s) in x.terms
-        tn,sn = Avac(vacA(t,s,mv)...,mv)
+"""
+    _multi_lie_gen_vacuum_expval(algebra_id, gen_indices)
+
+Compute the vacuum expectation value ⟨0|T^{a₁} T^{a₂} ... T^{aₙ}|0⟩
+for a product of Lie algebra generators by recursively applying the
+product rule T^a T^b = (1/2N)δ_{ab} I + (1/2)(d^{abc} + i f^{abc}) T^c.
+"""
+function _multi_lie_gen_vacuum_expval(algebra_id::UInt16, gen_indices::Vector{UInt16})
+    if isempty(gen_indices)
+        return ComplexF64(1.0)
+    end
+    if length(gen_indices) == 1
+        return ComplexF64(_lie_gen_vacuum_expval(algebra_id, gen_indices[1]))
+    end
+    # Expand first pair: T^a T^b
+    a, b = Int(gen_indices[1]), Int(gen_indices[2])
+    rest = gen_indices[3:end]
+    alg = get_algebra(algebra_id)
+    id_coeff, gen_coeffs = product_coefficients(alg, a, b)
+    total = zero(ComplexF64)
+    if !iszero(id_coeff)
+        total += id_coeff * _multi_lie_gen_vacuum_expval(algebra_id, rest)
+    end
+    for (c, coeff) in gen_coeffs
+        total += coeff * _multi_lie_gen_vacuum_expval(algebra_id, vcat(UInt16(c), rest))
+    end
+    return total
+end
+
+# Main vacExpVal loop
+for (t,s) in x.terms
+    tn,sn = Avac(vacA(t,s,mv)...,mv)
         if isnothing(mv)
             # Check if remaining operators are all Lie algebra generators
             # For such operators, compute their vacuum expectation value directly
@@ -424,13 +454,10 @@ function vacExpVal(A::QuExpr,stateop::QuExpr=QuExpr(QuTerm()),modes_in_vacuum=no
                         sn = sn * lie_vev
                         tn = QuTerm(tn.nsuminds, tn.δs, tn.params, tn.expvals, tn.corrs, BaseOpProduct())
                     else
-                        # Multiple Lie generators remaining - this is more complex
-                        # For now, we need to compute ⟨0|T^a T^b ... |0⟩
-                        # This requires expanding using the product rule
-                        # For simplicity, return zero for off-diagonal combinations
-                        # and handle diagonal combinations
-                        # TODO: Implement proper multi-generator vacuum expectation
-                        sn = zero(sn)
+                        # Recursively expand using the product rule
+                        gen_indices = UInt16[op.gen_idx for op in tn.bares.v]
+                        lie_vev = _multi_lie_gen_vacuum_expval(tn.bares.v[1].algebra_id, gen_indices)
+                        sn = sn * lie_vev
                         tn = QuTerm(tn.nsuminds, tn.δs, tn.params, tn.expvals, tn.corrs, BaseOpProduct())
                     end
                 end
