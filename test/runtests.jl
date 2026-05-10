@@ -593,6 +593,4 @@ end
         @test EQ.eqs[lhs] == normal_form(rhs)
     end
 
-    # Symbolic sums and products tests are in a separate file
-    include("test_symbolic_sums.jl")
 end

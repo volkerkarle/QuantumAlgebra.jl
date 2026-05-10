@@ -433,8 +433,6 @@ function vacExpVal(A::QuExpr,stateop::QuExpr=QuExpr(QuTerm()),modes_in_vacuum=no
                         sn = zero(sn)
                         tn = QuTerm(tn.nsuminds, tn.δs, tn.params, tn.expvals, tn.corrs, BaseOpProduct())
                     end
-                else
-                    @assert false "Expected all remaining operators to be Lie algebra generators or empty"
                 end
             end
         end

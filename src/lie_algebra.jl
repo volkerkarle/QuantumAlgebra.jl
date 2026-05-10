@@ -111,27 +111,6 @@ function gellmann_matrix(N::Int, k::Int)
     error("Should not reach here")
 end
 
-"""
-    _to_rational(x::Real, tol=1e-10)
-
-Convert a real number to a rational if it's close to a simple fraction.
-Returns the rational if successful, otherwise returns the original Float64.
-"""
-function _to_rational(x::Real, tol::Float64=1e-10)
-    abs(x) < tol && return Rational{Int}(0)
-    
-    # Try common simple fractions first (up to denominator 12)
-    for denom in 1:12
-        numer = round(Int, x * denom)
-        if abs(x - numer / denom) < tol
-            return Rational{Int}(numer, denom)
-        end
-    end
-    
-    # Not a simple rational, return nothing to indicate failure
-    return nothing
-end
-
 const STRUCTURE_CONSTANT_TOL = 1e-12
 
 """

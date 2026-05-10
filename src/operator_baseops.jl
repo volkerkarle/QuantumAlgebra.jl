@@ -748,6 +748,23 @@ function _exchange_lie_algebra_generators(A::BaseOperator, B::BaseOperator)
 end
 
 """
+    _to_rational(x::Real, tol=1e-10)
+
+Convert a real number to a rational if it's close to a simple fraction.
+Returns the rational if successful, otherwise returns nothing.
+"""
+function _to_rational(x::Real, tol::Float64=1e-10)
+    abs(x) < tol && return Rational{Int}(0)
+    for denom in 1:12
+        numer = round(Int, x * denom)
+        if abs(x - numer / denom) < tol
+            return Rational{Int}(numer, denom)
+        end
+    end
+    return nothing
+end
+
+"""
 Try to convert a ComplexF64 to Complex{Rational{Int}}.
 Returns nothing if not representable as a simple rational.
 """

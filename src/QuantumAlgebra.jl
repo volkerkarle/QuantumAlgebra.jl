@@ -14,8 +14,6 @@ include("vacuum_expvals.jl")
 include("convert_to_expression.jl")
 include("eqsofmotion.jl")
 include("eqsys.jl")
-include("symbolic_sums.jl")  # Symbolic sums and products with proper commutator semantics
-
 include("precompile.jl")
 
 function __init__()
