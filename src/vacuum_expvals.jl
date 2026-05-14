@@ -33,38 +33,62 @@ _parse_modes_in_vacuum(modes) = Set{QuOpName}(_get_mode_name.(modes))
 Return the eigenvalue of T^{gen_idx} on the vacuum state |0⟩ for the given algebra,
 or `nothing` if the generator does not have |0⟩ as an eigenstate.
 
-For SU(N), the vacuum is |N⟩ (the N-th basis state).
+For SU(N): the vacuum is |N⟩ (the N-th basis state). Diagonal generators (last N-1)
+have well-defined eigenvalues. Off-diagonal generators return nothing.
+
+For SO(N): in the vector representation all generators are off-diagonal (anti-symmetric
+matrices have zero diagonal). Returns nothing for all generators.
+
+For Sp(2N): the vacuum is |2N⟩ (the last basis state). The diagonal generator
+H_N = |e_N⟩⟨e_N| - |e_{2N}⟩⟨e_{2N}| has eigenvalue -1. Other diagonal generators
+in the A-block with i < N have eigenvalue 0 (they don't affect |2N⟩). Off-diagonal
+generators return nothing.
 """
 function _lie_gen_vacuum_eigenvalue(algebra_id::UInt16, gen_idx::UInt16)
     alg = get_algebra(algebra_id)
     N = algebra_dim(alg)
-    ngen = N^2 - 1
-    n_offdiag = N * (N - 1)  # total off-diagonal generators (symmetric + antisymmetric)
     
-    # Off-diagonal generators don't have vacuum as eigenstate
-    if gen_idx <= n_offdiag
+    if alg isa SUAlgebra
+        ngen = N^2 - 1
+        n_offdiag = N * (N - 1)
+        # Off-diagonal generators don't have vacuum as eigenstate
+        if gen_idx <= n_offdiag
+            return nothing
+        end
+        # Diagonal generator: index l = gen_idx - n_offdiag (1 to N-1)
+        l = Int(gen_idx) - n_offdiag
+        norm = sqrt(1.0 / (2 * l * (l + 1)))
+        if l + 1 == N
+            return -l * norm
+        elseif l + 1 < N
+            return 0.0
+        else
+            return 0.0
+        end
+    end
+    
+    if alg isa SOAlgebra
+        # SO(N) vector rep: all generators have zero diagonal (anti-symmetric)
         return nothing
     end
     
-    # Diagonal generator: index l = gen_idx - n_offdiag (1 to N-1)
-    l = Int(gen_idx) - n_offdiag
-    
-    # For the l-th diagonal generator acting on |N⟩:
-    # T_l = sqrt(1/(2l(l+1))) * (sum_{j=1}^l |j⟩⟨j| - l|l+1⟩⟨l+1|)
-    # For |N⟩: if l+1 < N, coefficient is 0. If l+1 = N, coefficient is -l * norm
-    # If l+1 > N (impossible since l ≤ N-1), no contribution
-    
-    norm = sqrt(1.0 / (2 * l * (l + 1)))
-    if l + 1 == N
-        # |N⟩ gets coefficient -l * norm
-        return -l * norm
-    elseif l + 1 < N
-        # |N⟩ is not affected by this generator
-        return 0.0
-    else
-        # Should not happen
-        return 0.0
+    if alg isa SpAlgebra
+        # Sp(2N) generators:
+        # Groups are organized by rank (N_rank = algebra_dim/2), not full dimension
+        N_rank = N ÷ 2
+        ig = Int(gen_idx)
+        if ig <= N_rank
+            # A-block diagonal generator H_i
+            if ig == N_rank
+                return -1.0  # H_{N_rank} |2*N_rank⟩ = -|2*N_rank⟩
+            else
+                return 0.0   # H_i for i<N_rank doesn't touch |2*N_rank⟩
+            end
+        end
+        return nothing
     end
+    
+    return nothing
 end
 
 """
@@ -72,63 +96,121 @@ end
 
 Return true if T^{gen_idx} |0⟩ = 0 (lowering-type operator on vacuum).
 
-For SU(N), generators that lower the weight annihilate the vacuum.
-These are the antisymmetric off-diagonal generators for pairs (j, N) with j < N,
-which correspond to "lowering" from |j⟩ to |N⟩ or vice versa.
+For SU(N): lowering operators (anti-symmetric off-diagonal that don't involve |N⟩)
+annihilate the vacuum.
+
+For SO(N): generators that don't involve the state |N⟩ annihilate. Specifically,
+T^{(iN)} for i<N does NOT annihilate (produces |i⟩). Other generators annihilate.
+
+For Sp(2N): generators that don't involve the |2N⟩ state annihilate the vacuum.
 """
 function _lie_gen_annihilates_vacuum(algebra_id::UInt16, gen_idx::UInt16)
     alg = get_algebra(algebra_id)
     N = algebra_dim(alg)
-    n_sym_offdiag = div(N * (N - 1), 2)
     
-    # For antisymmetric off-diagonal: indices n_sym_offdiag+1 to 2*n_sym_offdiag
-    # These correspond to pairs (row, col) with row < col
-    # The pair (j, N) for j < N corresponds to lowering operators
-    
-    if gen_idx <= n_sym_offdiag
-        # Symmetric off-diagonal: check if it involves |N⟩
-        # These are (|j⟩⟨k| + |k⟩⟨j|)/2 for j < k
-        # When acting on |N⟩: gives |j⟩/2 if k=N, 0 otherwise
-        # So it doesn't annihilate but also doesn't keep |N⟩
-        idx = Int(gen_idx)
-        count = 0
-        for col in 2:N
-            for row in 1:col-1
-                count += 1
-                if count == idx
-                    # This is the (row, col) pair
-                    if col == N
-                        # Acts on |N⟩, produces |row⟩, doesn't annihilate
-                        return false
-                    else
-                        # Doesn't act on |N⟩, gives 0
-                        return true
+    if alg isa SUAlgebra
+        n_sym_offdiag = div(N * (N - 1), 2)
+        if gen_idx <= n_sym_offdiag
+            # Symmetric off-diagonal generators
+            idx = Int(gen_idx)
+            count = 0
+            for col in 2:N
+                for row in 1:col-1
+                    count += 1
+                    if count == idx
+                        return col != N
+                    end
+                end
+            end
+        elseif gen_idx <= 2 * n_sym_offdiag
+            # Antisymmetric off-diagonal: same logic as symmetric
+            idx = Int(gen_idx) - n_sym_offdiag
+            count = 0
+            for col in 2:N
+                for row in 1:col-1
+                    count += 1
+                    if count == idx
+                        return col != N
                     end
                 end
             end
         end
-    elseif gen_idx <= 2 * n_sym_offdiag
-        # Antisymmetric off-diagonal: -i(|j⟩⟨k| - |k⟩⟨j|)/2 for j < k
-        idx = Int(gen_idx) - n_sym_offdiag
-        count = 0
-        for col in 2:N
-            for row in 1:col-1
-                count += 1
-                if count == idx
-                    if col == N
-                        # Acts on |N⟩, produces -i|row⟩/2, doesn't annihilate
-                        return false
-                    else
-                        # Doesn't act on |N⟩
-                        return true
-                    end
-                end
-            end
-        end
+        # Diagonal generators don't annihilate
+        return false
     end
     
-    # Diagonal generators don't annihilate
-    return false
+    if alg isa SOAlgebra
+        # SO(N) vector rep generators T^{(ij)} = -im(e_i e_j^T - e_j e_i^T)/2:
+        # Ordering: (1,2), (1,3), ..., (1,N), (2,3), ..., (N-1,N)
+        # Generator involves state N if its column is N (second index of pair = N)
+        # So only generators with (i,N) for i<N don't annihilate.
+        # All others (no N involved) annihilate.
+        ig = Int(gen_idx)
+        count = 0
+        for j in 2:N
+            for i in 1:j-1
+                count += 1
+                if count == ig
+                    return j != N  # true if NOT involving N → annihilates
+                end
+            end
+        end
+        return true
+    end
+    
+    if alg isa SpAlgebra
+        # Sp(2N) generators with the following grouping (N_rank = algebra_dim/2):
+        # Group 1 (A-diag, N_rank):           H_i = [[E_{ii},0],[0,-E_{ii}]]
+        # Group 2 (A-off-diag sym, N_rank(N_rank-1)/2):   K^+_{ij}
+        # Group 3 (A-off-diag anti, N_rank(N_rank-1)/2):  K^-_{ij}
+        # Group 4 (B-block sym, N_rank(N_rank+1)/2):      F^+_{ij}
+        # Group 5 (B-block anti, N_rank(N_rank+1)/2):     F^-_{ij}
+        #
+        # A generator annihilates |2N⟩ if it has a zero in column 2N.
+        N_rank = N ÷ 2
+        ig = Int(gen_idx)
+        
+        n_a_diag = N_rank
+        n_a_offdiag = N_rank * (N_rank - 1)   # groups 2+3 combined
+        n_b_block = N_rank * (N_rank + 1)     # groups 4+5 combined
+        
+        # Group 1: A-diagonal
+        if ig <= n_a_diag
+            return ig != N_rank  # H_{N_rank} doesn't annihilate
+        end
+        
+        # Groups 2+3: A-off-diag
+        if ig <= n_a_diag + n_a_offdiag
+            idx = ig - n_a_diag
+            count = 0
+            for j in 2:N_rank
+                for i in 1:j-1
+                    count += 1
+                    if count == idx
+                        return j != N_rank
+                    end
+                end
+            end
+        end
+        
+        # Groups 4+5: B-block
+        if ig <= n_a_diag + n_a_offdiag + n_b_block
+            idx = ig - n_a_diag - n_a_offdiag
+            count = 0
+            for j in 1:N_rank
+                for i in 1:j
+                    count += 1
+                    if count == idx
+                        return j != N_rank
+                    end
+                end
+            end
+        end
+        
+        return true
+    end
+    
+    return true
 end
 
 """

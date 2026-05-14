@@ -9,7 +9,8 @@ export @tlspm_ops, @tlsxyz_ops
 export @Pr_str, @Pc_str, ∑
 export param, expval, corr
 export map_scalar_function
-export LieAlgebraGenerator, is_lie_algebra_gen, su_generator, su_generators
+export LieAlgebraGenerator, is_lie_algebra_gen, su_generator, su_generators,
+       so_generator, so_generators, sp_generator, sp_generators
 export TransitionOperator, is_transition_op, nlevel_ops, σ
 
 # compile-time options
@@ -961,6 +962,70 @@ A tuple of N²-1 QuExpr, one for each generator.
 function su_generators(N::Int, name::Symbol, inds...)
     ngen = N^2 - 1
     algebra_id = get_or_create_su(N)
+    ntuple(k -> QuExpr(LieAlgebraGenerator(name, algebra_id, k, inds...)), ngen)
+end
+
+# ============================================================================
+# SO(N) and Sp(2N) generator constructors
+# ============================================================================
+
+"""
+    so_generator(N::Int, name::Symbol, gen_idx::Int, inds...)
+
+Create a single SO(N) generator operator.
+
+# Arguments
+- `N`: dimension of SO(N) (N >= 3)
+- `name`: operator name
+- `gen_idx`: generator index (1 to N(N-1)/2)
+- `inds...`: optional indices
+"""
+function so_generator(N::Int, name::Symbol, gen_idx::Int, inds...)
+    ngen = div(N * (N - 1), 2)
+    1 <= gen_idx <= ngen || throw(ArgumentError("Generator index must be 1 to $ngen for SO($N), got $gen_idx"))
+    algebra_id = get_or_create_so(N)
+    QuExpr(LieAlgebraGenerator(name, algebra_id, gen_idx, inds...))
+end
+
+"""
+    so_generators(N::Int, name::Symbol, inds...)
+
+Create all SO(N) generators as a tuple of QuExpr.
+Returns N(N-1)/2 generators.
+"""
+function so_generators(N::Int, name::Symbol, inds...)
+    ngen = div(N * (N - 1), 2)
+    algebra_id = get_or_create_so(N)
+    ntuple(k -> QuExpr(LieAlgebraGenerator(name, algebra_id, k, inds...)), ngen)
+end
+
+"""
+    sp_generator(N::Int, name::Symbol, gen_idx::Int, inds...)
+
+Create a single Sp(2N) generator operator.
+
+# Arguments
+- `N`: rank of Sp(2N) (N >= 1)
+- `name`: operator name
+- `gen_idx`: generator index (1 to N(2N+1))
+- `inds...`: optional indices
+"""
+function sp_generator(N::Int, name::Symbol, gen_idx::Int, inds...)
+    ngen = N * (2N + 1)
+    1 <= gen_idx <= ngen || throw(ArgumentError("Generator index must be 1 to $ngen for Sp($(2N)), got $gen_idx"))
+    algebra_id = get_or_create_sp(N)
+    QuExpr(LieAlgebraGenerator(name, algebra_id, gen_idx, inds...))
+end
+
+"""
+    sp_generators(N::Int, name::Symbol, inds...)
+
+Create all Sp(2N) generators as a tuple of QuExpr.
+Returns N(2N+1) generators.
+"""
+function sp_generators(N::Int, name::Symbol, inds...)
+    ngen = N * (2N + 1)
+    algebra_id = get_or_create_sp(N)
     ntuple(k -> QuExpr(LieAlgebraGenerator(name, algebra_id, k, inds...)), ngen)
 end
 

@@ -47,6 +47,55 @@ algebra_dim(::SUAlgebra{N}) where N = N
 num_generators(::SUAlgebra{N}) where N = N^2 - 1
 
 """
+    SOAlgebra{N}
+
+Represents the SO(N) Lie algebra (special orthogonal group, rotations in R^N).
+Generators are anti-symmetric matrices: N(N-1)/2 generators in the N-dimensional
+vector representation. Normalization Tr(T^a T^b) = δ_{ab}/2.
+"""
+struct SOAlgebra{N} <: AbstractLieAlgebra
+    f::Matrix{Dict{Int, Float64}}
+    d::Matrix{Dict{Int, Float64}}
+    function SOAlgebra{N}() where N
+        N >= 3 || throw(ArgumentError("SO(N) requires N >= 3, got N=$N"))
+        ngen = div(N * (N - 1), 2)
+        f = [Dict{Int, Float64}() for _ in 1:ngen, _ in 1:ngen]
+        d = [Dict{Int, Float64}() for _ in 1:ngen, _ in 1:ngen]
+        alg = new{N}(f, d)
+        _compute_so_structure_constants!(alg)
+        alg
+    end
+end
+
+algebra_dim(::SOAlgebra{N}) where N = N
+num_generators(::SOAlgebra{N}) where N = div(N * (N - 1), 2)
+
+"""
+    SpAlgebra{N}
+
+Represents the Sp(2N) Lie algebra (symplectic group).
+Generators are 2N×2N matrices satisfying M^T J + J M = 0 with J = [[0,I],[-I,0]].
+Total generators: N(2N+1) in the 2N-dimensional fundamental representation.
+Normalization Tr(T^a T^b) = δ_{ab}/2.
+"""
+struct SpAlgebra{N} <: AbstractLieAlgebra
+    f::Matrix{Dict{Int, Float64}}
+    d::Matrix{Dict{Int, Float64}}
+    function SpAlgebra{N}() where N
+        N >= 1 || throw(ArgumentError("Sp(2N) requires N >= 1, got N=$N"))
+        ngen = N * (2N + 1)
+        f = [Dict{Int, Float64}() for _ in 1:ngen, _ in 1:ngen]
+        d = [Dict{Int, Float64}() for _ in 1:ngen, _ in 1:ngen]
+        alg = new{N}(f, d)
+        _compute_sp_structure_constants!(alg)
+        alg
+    end
+end
+
+algebra_dim(::SpAlgebra{N}) where N = 2N
+num_generators(::SpAlgebra{N}) where N = N * (2N + 1)
+
+"""
     gellmann_matrix(N, k)
 
 Compute the k-th generalized Gell-Mann matrix for SU(N).
@@ -162,37 +211,225 @@ function _compute_structure_constants!(alg::SUAlgebra{N}) where N
 end
 
 """
-    structure_constants(alg::SUAlgebra, a, b)
+    _compute_so_structure_constants!(alg::SOAlgebra{N})
+
+Compute f^{abc} for SO(N) generators using the antisymmetric Hermitian basis.
+The basis is T^{(ij)} = -i * (e_i e_j^T - e_j e_i^T) / 2 for i < j.
+Normalization: Tr(T^a T^b) = δ_{ab}/2.
+"""
+function _compute_so_structure_constants!(alg::SOAlgebra{N}) where N
+    ngen = div(N * (N - 1), 2)
+    generators = _so_basis_matrices(N)
+    
+    for a in 1:ngen
+        Ta = generators[a]
+        for b in 1:ngen
+            Tb = generators[b]
+            comm = Ta * Tb - Tb * Ta
+            for c in 1:ngen
+                Tc = generators[c]
+                f_abc_raw = -2im * tr(comm * Tc)
+                f_abc = real(f_abc_raw)
+                if abs(f_abc) > STRUCTURE_CONSTANT_TOL
+                    alg.f[a, b][c] = f_abc
+                end
+            end
+        end
+    end
+end
+
+"""
+    _so_basis_matrices(N)
+
+Generate the Hermitian basis matrices for SO(N) in the vector representation.
+Returns N(N-1)/2 matrices of size N×N.
+"""
+function _so_basis_matrices(N::Int)
+    ngen = div(N * (N - 1), 2)
+    basis = Vector{Matrix{ComplexF64}}(undef, ngen)
+    k = 0
+    for j in 2:N
+        for i in 1:j-1
+            k += 1
+            M = zeros(ComplexF64, N, N)
+            M[i, j] = 1.0
+            M[j, i] = -1.0
+            basis[k] = -im * M / 2
+        end
+    end
+    basis
+end
+
+"""
+    _compute_sp_structure_constants!(alg::SpAlgebra{N})
+
+Compute f^{abc} for Sp(2N) generators using the fundamental 2N×2N representation.
+The basis uses the block decomposition M = [[A,B],[C,-A^T]] with B=B^T, C=C^T.
+"""
+function _compute_sp_structure_constants!(alg::SpAlgebra{N}) where N
+    ngen = N * (2N + 1)
+    generators = _sp_basis_matrices(N)
+    
+    for a in 1:ngen
+        Ta = generators[a]
+        for b in 1:ngen
+            Tb = generators[b]
+            comm = Ta * Tb - Tb * Ta
+            for c in 1:ngen
+                Tc = generators[c]
+                f_abc_raw = -2im * tr(comm * Tc)
+                f_abc = real(f_abc_raw)
+                if abs(f_abc) > STRUCTURE_CONSTANT_TOL
+                    alg.f[a, b][c] = f_abc
+                end
+            end
+        end
+    end
+end
+
+"""
+    _sp_basis_matrices(N)
+
+Generate the Hermitian basis matrices for Sp(2N) in the fundamental representation.
+Returns N(2N+1) matrices of size 2N×2N.
+
+The basis uses the block decomposition with J = [[0, I_N], [-I_N, 0]].
+The sp(2N) algebra consists of matrices M = [[A, B], [C, -A^T]]
+where B and C are symmetric.
+
+Groups:
+1. A-diagonal: N matrices [[E_{ii}, 0], [0, -E_{ii}]]
+2. A-off-diag symmetric: N(N-1)/2 matrices [[E_{ij}+E_{ji}, 0], [0, -(E_{ij}+E_{ji})]]
+3. A-off-diag anti: N(N-1)/2 matrices [[-im(E_{ij}-E_{ji}), 0], [0, im(E_{ij}-E_{ji})]]
+4. B symmetric: N(N+1)/2 matrices [[0, E_{ij}+E_{ji}], [E_{ij}+E_{ji}, 0]]
+5. B anti: N(N+1)/2 matrices [[0, -im(E_{ij}+E_{ji})], [im(E_{ij}+E_{ji}), 0]]
+
+Total: N + N(N-1)/2 + N(N-1)/2 + N(N+1)/2 + N(N+1)/2 = 2N² + N = N(2N+1) ✓
+"""
+function _sp_basis_matrices(N::Int)
+    ngen = N * (2N + 1)
+    basis = Vector{Matrix{ComplexF64}}(undef, ngen)
+    k = 0
+    
+    # Group 1: A-diagonal generators H_i = [[E_{ii}, 0], [0, -E_{ii}]]
+    for i in 1:N
+        k += 1
+        M = zeros(ComplexF64, 2N, 2N)
+        M[i, i] = 1.0
+        M[N+i, N+i] = -1.0
+        basis[k] = M
+    end
+    
+    # Group 2: A-off-diagonal symmetric: K^+_{ij} = [[E_{ij}+E_{ji}, 0], [0, -(E_{ij}+E_{ji})]]
+    for j in 2:N
+        for i in 1:j-1
+            k += 1
+            M = zeros(ComplexF64, 2N, 2N)
+            M[i, j] = 1.0
+            M[j, i] = 1.0
+            M[N+i, N+j] = -1.0
+            M[N+j, N+i] = -1.0
+            basis[k] = M
+        end
+    end
+    
+    # Group 3: A-off-diagonal anti: K^-_{ij} = [[-im(E_{ij}-E_{ji}), 0], [0, im(E_{ij}-E_{ji})]]
+    for j in 2:N
+        for i in 1:j-1
+            k += 1
+            M = zeros(ComplexF64, 2N, 2N)
+            M[i, j] = -1.0im
+            M[j, i] = 1.0im
+            M[N+i, N+j] = 1.0im
+            M[N+j, N+i] = -1.0im
+            basis[k] = M
+        end
+    end
+    
+    # Group 4: B-block symmetric: F^+_{ij} = [[0, E_{ij}+E_{ji}], [E_{ij}+E_{ji}, 0]]
+    for j in 1:N
+        for i in 1:j
+            k += 1
+            M = zeros(ComplexF64, 2N, 2N)
+            M[i, N+j] = 1.0
+            M[j, N+i] = 1.0
+            M[N+i, j] = 1.0
+            M[N+j, i] = 1.0
+            basis[k] = M
+        end
+    end
+    
+    # Group 5: B-block anti: F^-_{ij} = [[0, -im(E_{ij}+E_{ji})], [im(E_{ij}+E_{ji}), 0]]
+    for j in 1:N
+        for i in 1:j
+            k += 1
+            M = zeros(ComplexF64, 2N, 2N)
+            M[i, N+j] = -1.0im
+            M[j, N+i] = -1.0im
+            M[N+i, j] = 1.0im
+            M[N+j, i] = 1.0im
+            basis[k] = M
+        end
+    end
+    
+    # Normalize each generator to Tr(T^a T^a) = 1/2
+    for a in 1:ngen
+        norm2 = real(tr(basis[a] * basis[a]))
+        if !iszero(norm2)
+            basis[a] /= sqrt(2 * norm2)
+        end
+    end
+    
+    # Verify orthogonality by removing linear dependencies (Gram-Schmidt)
+    for a in 1:ngen
+        for b in 1:a-1
+            overlap = real(tr(basis[a] * basis[b]))
+            if abs(overlap) > 1e-12
+                factor = overlap / real(tr(basis[b] * basis[b]))
+                basis[a] -= factor * basis[b]
+            end
+        end
+        norm2 = real(tr(basis[a] * basis[a]))
+        if !iszero(norm2)
+            basis[a] /= sqrt(2 * norm2)
+        end
+    end
+    
+    basis
+end
+
+"""
+    structure_constants(alg::AbstractLieAlgebra, a, b)
 
 Returns the non-zero structure constants for [T^a, T^b] = i f^{abc} T^c.
 Returns a Dict mapping c => f^{abc} for all c where f^{abc} ≠ 0.
 """
-function structure_constants(alg::SUAlgebra, a::Int, b::Int)
+function structure_constants(alg::AbstractLieAlgebra, a::Int, b::Int)
     alg.f[a, b]
 end
 
 """
-    symmetric_structure_constants(alg::SUAlgebra, a, b)
+    symmetric_structure_constants(alg::AbstractLieAlgebra, a, b)
 
 Returns the non-zero symmetric structure constants for the product rule.
 Returns a Dict mapping c => d^{abc} for all c where d^{abc} ≠ 0.
 """
-function symmetric_structure_constants(alg::SUAlgebra, a::Int, b::Int)
+function symmetric_structure_constants(alg::AbstractLieAlgebra, a::Int, b::Int)
     alg.d[a, b]
 end
 
 """
-    identity_coefficient(alg::SUAlgebra{N}, a, b)
+    identity_coefficient(alg::AbstractLieAlgebra, a, b)
 
 Returns the coefficient of the identity in T^a T^b = coeff * I + ...
-For SU(N): T^a T^b = (1/2N) δ_{ab} I + (1/2)(d^{abc} + i f^{abc}) T^c
+For an N-dimensional algebra: T^a T^b = (1/(2N)) δ_{ab} I + ...
 """
-function identity_coefficient(alg::SUAlgebra{N}, a::Int, b::Int) where N
-    a == b ? 1.0 / (2N) : 0.0
+function identity_coefficient(alg::AbstractLieAlgebra, a::Int, b::Int)
+    a == b ? 1.0 / (2 * algebra_dim(alg)) : 0.0
 end
 
 """
-    product_coefficients(alg::SUAlgebra, a, b)
+    product_coefficients(alg::AbstractLieAlgebra, a, b)
 
 Compute the full expansion of T^a T^b.
 Returns (id_coeff, gen_coeffs) where:
@@ -201,7 +438,7 @@ Returns (id_coeff, gen_coeffs) where:
 
 T^a T^b = id_coeff * I + sum_c gen_coeffs[c] * T^c
 """
-function product_coefficients(alg::SUAlgebra{N}, a::Int, b::Int) where N
+function product_coefficients(alg::AbstractLieAlgebra, a::Int, b::Int)
     id_coeff = identity_coefficient(alg, a, b)
     
     gen_coeffs = Dict{Int, ComplexF64}()
@@ -220,12 +457,12 @@ function product_coefficients(alg::SUAlgebra{N}, a::Int, b::Int) where N
 end
 
 """
-    commutator_coefficients(alg::SUAlgebra, a, b)
+    commutator_coefficients(alg::AbstractLieAlgebra, a, b)
 
 Compute the expansion of [T^a, T^b] = i f^{abc} T^c.
 Returns a Dict mapping c => i*f^{abc} for all c where f^{abc} ≠ 0.
 """
-function commutator_coefficients(alg::SUAlgebra, a::Int, b::Int)
+function commutator_coefficients(alg::AbstractLieAlgebra, a::Int, b::Int)
     result = Dict{Int, ComplexF64}()
     for (c, f_abc) in alg.f[a, b]
         result[c] = im * f_abc
@@ -313,6 +550,60 @@ function get_or_create_su(N::Int)
             return ALGEBRA_REGISTRY.type_dim_to_id[key]
         end
         # We won the race, insert our algebra
+        push!(ALGEBRA_REGISTRY.algebras, alg)
+        id = UInt16(length(ALGEBRA_REGISTRY.algebras))
+        ALGEBRA_REGISTRY.type_dim_to_id[key] = id
+        id
+    end
+end
+
+"""
+    get_or_create_so(N::Int)
+
+Get or create an SO(N) algebra and return its registry ID.
+Uses double-checked locking to avoid holding the lock during expensive algebra construction.
+"""
+function get_or_create_so(N::Int)
+    key = (:SO, N)
+    
+    existing_id = lock(_ALGEBRA_REGISTRY_LOCK) do
+        get(ALGEBRA_REGISTRY.type_dim_to_id, key, nothing)
+    end
+    existing_id !== nothing && return existing_id
+    
+    alg = SOAlgebra{N}()
+    
+    lock(_ALGEBRA_REGISTRY_LOCK) do
+        if haskey(ALGEBRA_REGISTRY.type_dim_to_id, key)
+            return ALGEBRA_REGISTRY.type_dim_to_id[key]
+        end
+        push!(ALGEBRA_REGISTRY.algebras, alg)
+        id = UInt16(length(ALGEBRA_REGISTRY.algebras))
+        ALGEBRA_REGISTRY.type_dim_to_id[key] = id
+        id
+    end
+end
+
+"""
+    get_or_create_sp(N::Int)
+
+Get or create an Sp(2N) algebra and return its registry ID.
+Uses double-checked locking to avoid holding the lock during expensive algebra construction.
+"""
+function get_or_create_sp(N::Int)
+    key = (:SP, N)
+    
+    existing_id = lock(_ALGEBRA_REGISTRY_LOCK) do
+        get(ALGEBRA_REGISTRY.type_dim_to_id, key, nothing)
+    end
+    existing_id !== nothing && return existing_id
+    
+    alg = SpAlgebra{N}()
+    
+    lock(_ALGEBRA_REGISTRY_LOCK) do
+        if haskey(ALGEBRA_REGISTRY.type_dim_to_id, key)
+            return ALGEBRA_REGISTRY.type_dim_to_id[key]
+        end
         push!(ALGEBRA_REGISTRY.algebras, alg)
         id = UInt16(length(ALGEBRA_REGISTRY.algebras))
         ALGEBRA_REGISTRY.type_dim_to_id[key] = id

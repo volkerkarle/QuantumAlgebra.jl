@@ -1336,6 +1336,74 @@ end
         @test QuantumAlgebra.sun_id_coeff(2) == 1//4
     end
 
+    @testset "SO(N) Lie Algebra" begin
+        # SO(3) = 3 generators
+        L = so_generators(3, :L)
+        @test length(L) == 3
+        
+        # Commutation: [L¹, L²] = i/2 * L³
+        c12 = normal_form(comm(L[1], L[2]))
+        @test normal_form(c12) == normal_form(0.5im * L[3])
+        
+        # [L³, L¹] = i/2 * L²
+        c31 = normal_form(comm(L[3], L[1]))
+        @test normal_form(c31) == normal_form(0.5im * L[2])
+        
+        # Vacuum eigenvalue: 0 for all (vector rep has no diagonal generators)
+        @test iszero(vacExpVal(L[1]))
+        @test iszero(vacExpVal(L[2]))
+        @test iszero(vacExpVal(L[3]))
+        
+        # Product: ⟨0|L¹L¹|0⟩ = Tr(L¹²)/dim = 1/(2*3)
+        @test normal_form(vacExpVal(L[1]*L[1])) == normal_form(QuExpr(1//6))
+        
+        # Cross product: ⟨0|L¹L²|0⟩ = 0
+        @test iszero(normal_form(vacExpVal(L[1]*L[2])))
+        
+        # SO(4) = 6 generators
+        L4 = so_generators(4, :L)
+        @test length(L4) == 6
+        
+        # Verify generators span independently
+        @test !iszero(L4[1])
+        @test !iszero(L4[6])
+        
+        # Commutator works
+        @test !iszero(normal_form(comm(L4[1], L4[2])))
+        
+        # Vacuum expectation
+        @test iszero(vacExpVal(L4[1]))
+        @test normal_form(vacExpVal(L4[1]*L4[1])) == normal_form(QuExpr(1//8))
+    end
+
+    @testset "Sp(2N) Lie Algebra" begin
+        # Sp(2) = su(2) = 3 generators
+        S = sp_generators(1, :S)
+        @test length(S) == 3  # N(2N+1) = 1*3 = 3
+        
+        # [S¹, S²] = i * S³ (same as su(2))
+        c12 = normal_form(comm(S[1], S[2]))
+        @test normal_form(c12) == normal_form(1im * S[3])
+        
+        # Vacuum eigenvalue: H₁|2⟩ = -|2⟩
+        @test normal_form(vacExpVal(S[1])) == normal_form(QuExpr(-1))
+        
+        # Sp(4) = 10 generators
+        S4 = sp_generators(2, :S)
+        @test length(S4) == 10  # N(2N+1) = 2*5 = 10
+        
+        # H₁ doesn't touch |4⟩, H₂ does
+        @test iszero(vacExpVal(S4[1]))
+        @test normal_form(vacExpVal(S4[2])) == normal_form(QuExpr(-1))
+        
+        # Commutators: [H₁, F⁺₁₁] = i·F⁻₁₁ (Cartan × raising = same raising)
+        c = normal_form(comm(S4[1], S4[5]))
+        @test !iszero(c)
+        
+        # Product VEV
+        @test !iszero(normal_form(vacExpVal(S4[2] * S4[2])))
+    end
+
 end
 
 
